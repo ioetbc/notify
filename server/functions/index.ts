@@ -1,13 +1,10 @@
 import { Hono } from 'hono';
 import { handle } from 'hono/aws-lambda';
-import { cors } from 'hono/cors';
 import { neon } from '@neondatabase/serverless';
 import { Resource } from 'sst';
 
 const sql = neon(Resource.NeonDB.connectionString);
 const app = new Hono();
-
-app.use('*', cors());
 
 app
   .get('/', (c) => {
