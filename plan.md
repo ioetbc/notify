@@ -4,7 +4,7 @@
 Build a Notion/Loops-style homepage for a push notification business with sidebar navigation, accordion sections, and campaign/transactional management.
 
 ## Current State
-- React 19 + Vite 6 + Hono + Cloudflare Workers
+- React 19 + Vite 6 + SST (AWS)
 - No Tailwind CSS (needs v4 install)
 - No React Router (needs install)
 - Template app only - complete rebuild needed
