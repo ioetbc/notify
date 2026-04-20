@@ -62,9 +62,13 @@ export function WaitNode({ data, selected }: NodeProps<WaitNode>) {
 export function BranchNode({ data, selected }: NodeProps<BranchNode>) {
   const { user_column, operator, compare_value } = data.config;
   const needsValue = operator === '=' || operator === '!=';
-  const conditionText = needsValue
-    ? `${user_column} ${operator} "${compare_value}"`
-    : `${user_column} ${operator}`;
+
+  let conditionText = 'Configure condition...';
+  if (user_column) {
+    conditionText = needsValue
+      ? `${user_column} ${operator} "${compare_value || ''}"`
+      : `${user_column} ${operator}`;
+  }
 
   return (
     <div

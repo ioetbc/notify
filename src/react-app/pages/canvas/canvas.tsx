@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, useEffect } from 'react';
 import {
   ReactFlow,
   Background,
@@ -27,11 +27,21 @@ import type {
   SendNodeData,
 } from './types';
 
-const TRIGGER_EVENTS: { value: TriggerEvent; label: string }[] = [
-  { value: 'contact_added', label: 'Contact Added' },
-  { value: 'contact_updated', label: 'Contact Updated' },
-  { value: 'event_received', label: 'Event Received' },
-];
+const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+
+// Format trigger event for display (e.g., "contact_added" -> "Contact Added")
+function formatTriggerEvent(event: string): string {
+  return event
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+interface UserColumn {
+  id: string;
+  name: string;
+  data_type: 'text' | 'boolean' | 'number';
+}
 
 type CanvasNode = Node<StepNodeData, StepType>;
 
@@ -52,7 +62,7 @@ function createNodeData(type: StepType): StepNodeData {
     case 'branch':
       return {
         type: 'branch',
-        config: { user_column: 'plan', operator: '=', compare_value: 'pro' },
+        config: { user_column: '', operator: '=', compare_value: '' },
         label: 'Branch',
       } as BranchNodeData;
     case 'send':
@@ -75,6 +85,29 @@ export function Canvas() {
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNode, setSelectedNode] = useState<CanvasNode | null>(null);
+  const [userColumns, setUserColumns] = useState<UserColumn[]>([]);
+  const [triggerEvents, setTriggerEvents] = useState<TriggerEvent[]>([]);
+
+  useEffect(() => {
+    async function fetchData() {
+      if (!API_URL) return;
+      try {
+        const [columnsRes, enumsRes] = await Promise.all([
+          fetch(`${API_URL}/user-columns`),
+          fetch(`${API_URL}/enums`),
+        ]);
+
+        const columnsData = await columnsRes.json();
+        setUserColumns(columnsData.columns || []);
+
+        const enumsData = await enumsRes.json();
+        setTriggerEvents(enumsData.trigger_event || []);
+      } catch (err) {
+        console.error('Failed to fetch data:', err);
+      }
+    }
+    fetchData();
+  }, []);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -212,6 +245,8 @@ export function Canvas() {
               node={selectedNode}
               onUpdate={(config) => updateNodeData(selectedNode.id, config)}
               onClose={() => setSelectedNode(null)}
+              userColumns={userColumns}
+              triggerEvents={triggerEvents}
             />
           )}
         </div>
@@ -224,9 +259,11 @@ interface ConfigPanelProps {
   node: CanvasNode;
   onUpdate: (config: TriggerNodeData['config'] | WaitNodeData['config'] | BranchNodeData['config'] | SendNodeData['config']) => void;
   onClose: () => void;
+  userColumns: UserColumn[];
+  triggerEvents: TriggerEvent[];
 }
 
-function ConfigPanel({ node, onUpdate, onClose }: ConfigPanelProps) {
+function ConfigPanel({ node, onUpdate, onClose, userColumns, triggerEvents }: ConfigPanelProps) {
   const data = node.data;
 
   return (
@@ -245,6 +282,7 @@ function ConfigPanel({ node, onUpdate, onClose }: ConfigPanelProps) {
         <TriggerConfig
           config={data.config}
           onUpdate={onUpdate}
+          triggerEvents={triggerEvents}
         />
       )}
       {data.type === 'wait' && (
@@ -257,6 +295,7 @@ function ConfigPanel({ node, onUpdate, onClose }: ConfigPanelProps) {
         <BranchConfig
           config={data.config}
           onUpdate={onUpdate}
+          userColumns={userColumns}
         />
       )}
       {data.type === 'send' && (
@@ -272,9 +311,11 @@ function ConfigPanel({ node, onUpdate, onClose }: ConfigPanelProps) {
 function TriggerConfig({
   config,
   onUpdate,
+  triggerEvents,
 }: {
   config: TriggerNodeData['config'];
   onUpdate: (config: TriggerNodeData['config']) => void;
+  triggerEvents: TriggerEvent[];
 }) {
   return (
     <div>
@@ -284,9 +325,9 @@ function TriggerConfig({
         onChange={(e) => onUpdate({ event: e.target.value as TriggerEvent })}
         className="w-full border border-gray-300 rounded px-3 py-2"
       >
-        {TRIGGER_EVENTS.map((event) => (
-          <option key={event.value} value={event.value}>
-            {event.label}
+        {triggerEvents.map((event) => (
+          <option key={event} value={event}>
+            {formatTriggerEvent(event)}
           </option>
         ))}
       </select>
@@ -327,24 +368,35 @@ function WaitConfig({
 function BranchConfig({
   config,
   onUpdate,
+  userColumns,
 }: {
   config: BranchNodeData['config'];
   onUpdate: (config: BranchNodeData['config']) => void;
+  userColumns: UserColumn[];
 }) {
   const operators = ['=', '!=', 'exists', 'not_exists'] as const;
   const needsValue = config.operator === '=' || config.operator === '!=';
 
+  // Find the selected attribute to get its data type
+  const selectedAttribute = userColumns.find((col) => col.name === config.user_column);
+  const dataType = selectedAttribute?.data_type;
+
   return (
     <div className="space-y-3">
       <div>
-        <label className="block text-sm text-gray-700 mb-1">User Column</label>
-        <input
-          type="text"
+        <label className="block text-sm text-gray-700 mb-1">Attribute</label>
+        <select
           value={config.user_column}
-          onChange={(e) => onUpdate({ ...config, user_column: e.target.value })}
-          placeholder="e.g., plan, gender, phone"
+          onChange={(e) => onUpdate({ ...config, user_column: e.target.value, compare_value: '' })}
           className="w-full border border-gray-300 rounded px-3 py-2"
-        />
+        >
+          <option value="">Select an attribute...</option>
+          {userColumns.map((col) => (
+            <option key={col.id} value={col.name}>
+              {col.name} ({col.data_type})
+            </option>
+          ))}
+        </select>
       </div>
       <div>
         <label className="block text-sm text-gray-700 mb-1">Operator</label>
@@ -362,15 +414,38 @@ function BranchConfig({
           ))}
         </select>
       </div>
-      {needsValue && (
+      {needsValue && selectedAttribute && (
         <div>
           <label className="block text-sm text-gray-700 mb-1">Compare Value</label>
-          <input
-            type="text"
-            value={config.compare_value || ''}
-            onChange={(e) => onUpdate({ ...config, compare_value: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2"
-          />
+          {dataType === 'boolean' && (
+            <select
+              value={config.compare_value || ''}
+              onChange={(e) => onUpdate({ ...config, compare_value: e.target.value })}
+              className="w-full border border-gray-300 rounded px-3 py-2"
+            >
+              <option value="">Select...</option>
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          )}
+          {dataType === 'number' && (
+            <input
+              type="number"
+              value={config.compare_value || ''}
+              onChange={(e) => onUpdate({ ...config, compare_value: e.target.value })}
+              className="w-full border border-gray-300 rounded px-3 py-2"
+              placeholder="Enter a number"
+            />
+          )}
+          {dataType === 'text' && (
+            <input
+              type="text"
+              value={config.compare_value || ''}
+              onChange={(e) => onUpdate({ ...config, compare_value: e.target.value })}
+              className="w-full border border-gray-300 rounded px-3 py-2"
+              placeholder="Enter text"
+            />
+          )}
         </div>
       )}
     </div>

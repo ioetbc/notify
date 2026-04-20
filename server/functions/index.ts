@@ -97,6 +97,22 @@ app
 
     return c.json({ workflow });
   })
+  .get('/user-columns', async (c) => {
+    // Fetch custom attribute definitions from the database
+    // For now, fetch all (in production, you'd filter by customer_id)
+    const attributes = await sql`
+      SELECT
+        id,
+        name,
+        data_type
+      FROM attribute_definition
+      ORDER BY name
+    `;
+
+    return c.json({
+      columns: attributes,
+    });
+  })
   .put('/steps/:id', async (c) => {
     const stepId = c.req.param('id');
     const body = await c.req.json();
