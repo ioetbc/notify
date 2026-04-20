@@ -1,5 +1,5 @@
 To run a db migration:
-`bunx sst shell bun run migrate`
+`bunx sst shell bun run db:migrate`
 
 To run a db seed:
 `bunx sst shell bun run db:seed`

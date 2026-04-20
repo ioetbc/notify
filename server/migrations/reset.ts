@@ -10,6 +10,8 @@ await sql`DROP TABLE IF EXISTS step_branch CASCADE`;
 await sql`DROP TABLE IF EXISTS step_send CASCADE`;
 await sql`DROP TABLE IF EXISTS step CASCADE`;
 await sql`DROP TABLE IF EXISTS workflow CASCADE`;
+await sql`DROP TABLE IF EXISTS user_attribute CASCADE`;
+await sql`DROP TABLE IF EXISTS attribute_definition CASCADE`;
 await sql`DROP TABLE IF EXISTS "user" CASCADE`;
 await sql`DROP TABLE IF EXISTS customer CASCADE`;
 await sql`DROP TABLE IF EXISTS migrations CASCADE`;
@@ -20,6 +22,7 @@ await sql`DROP TYPE IF EXISTS trigger_event CASCADE`;
 await sql`DROP TYPE IF EXISTS enrollment_status CASCADE`;
 await sql`DROP TYPE IF EXISTS branch_operator CASCADE`;
 await sql`DROP TYPE IF EXISTS gender CASCADE`;
+await sql`DROP TYPE IF EXISTS attribute_type CASCADE`;
 
 console.log('All tables and types dropped.');
 await sql.end();

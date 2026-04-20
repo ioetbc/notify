@@ -14,11 +14,44 @@ async function seed() {
 
   // Create a user
   const [user] = await sql`
-    INSERT INTO "user" (customer_id, external_id, gender, plan, phone)
-    VALUES (${customer.id}, 'user_001', 'male', 'free', '+1234567890')
+    INSERT INTO "user" (customer_id, external_id, gender, phone)
+    VALUES (${customer.id}, 'user_001', 'male', '+1234567890')
     RETURNING id
   `;
   console.log('Created user:', user.id);
+
+  // Create attribute definitions
+  const [attrPlan] = await sql`
+    INSERT INTO attribute_definition (customer_id, name, data_type)
+    VALUES (${customer.id}, 'plan', 'text')
+    RETURNING id
+  `;
+  const [attrHasInsurance] = await sql`
+    INSERT INTO attribute_definition (customer_id, name, data_type)
+    VALUES (${customer.id}, 'has_insurance', 'boolean')
+    RETURNING id
+  `;
+  const [attrLoyaltyPoints] = await sql`
+    INSERT INTO attribute_definition (customer_id, name, data_type)
+    VALUES (${customer.id}, 'loyalty_points', 'number')
+    RETURNING id
+  `;
+  console.log('Created attribute definitions:', attrPlan.id, attrHasInsurance.id, attrLoyaltyPoints.id);
+
+  // Create user attributes
+  await sql`
+    INSERT INTO user_attribute (user_id, attribute_definition_id, value_text)
+    VALUES (${user.id}, ${attrPlan.id}, 'free')
+  `;
+  await sql`
+    INSERT INTO user_attribute (user_id, attribute_definition_id, value_boolean)
+    VALUES (${user.id}, ${attrHasInsurance.id}, false)
+  `;
+  await sql`
+    INSERT INTO user_attribute (user_id, attribute_definition_id, value_number)
+    VALUES (${user.id}, ${attrLoyaltyPoints.id}, 150)
+  `;
+  console.log('Created user attributes');
 
   // Create a workflow: "Upgrade Prompt"
   // Trigger: contact_added -> Wait 24h -> Branch (plan != pro) -> Send notification
@@ -55,8 +88,8 @@ async function seed() {
 
   // Configure branch step: if plan != 'pro', go to send; otherwise exit
   await sql`
-    INSERT INTO step_branch (step_id, user_column, operator, compare_value, true_step_id, false_step_id)
-    VALUES (${stepBranch.id}, 'plan', '!=', 'pro', ${stepSend.id}, NULL)
+    INSERT INTO step_branch (step_id, attribute_definition_id, operator, compare_value, true_step_id, false_step_id)
+    VALUES (${stepBranch.id}, ${attrPlan.id}, '!=', 'pro', ${stepSend.id}, NULL)
   `;
 
   // Configure send step: notification content, no next step (end)
