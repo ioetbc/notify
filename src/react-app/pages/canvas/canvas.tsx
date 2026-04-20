@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import {
   ReactFlow,
   Background,
@@ -17,6 +18,7 @@ import '@xyflow/react/dist/style.css';
 
 import { nodeTypes } from './nodes';
 import { StepPalette } from './step-palette';
+import { getLayoutedElements } from './layout';
 import type {
   StepType,
   TriggerEvent,
@@ -79,7 +81,159 @@ function getNodeId() {
   return `step_${nodeId++}`;
 }
 
+// Convert DB workflow response to canvas nodes/edges
+interface DbStep {
+  id: string;
+  step_type: 'wait' | 'branch' | 'send';
+  wait_hours?: number;
+  wait_next_step_id?: string;
+  branch_user_column?: string;
+  branch_operator?: string;
+  branch_compare_value?: string;
+  branch_true_step_id?: string;
+  branch_false_step_id?: string;
+  send_title?: string;
+  send_body?: string;
+  send_next_step_id?: string;
+}
+
+function dbToCanvas(
+  workflow: { id: string; name: string; trigger_event: TriggerEvent },
+  steps: DbStep[]
+): { nodes: CanvasNode[]; edges: Edge[] } {
+  const nodes: CanvasNode[] = [];
+  const edges: Edge[] = [];
+
+  // Create trigger node
+  const triggerNode: CanvasNode = {
+    id: 'trigger',
+    type: 'trigger' as const,
+    position: { x: 0, y: 0 },
+    data: {
+      type: 'trigger' as const,
+      config: { event: workflow.trigger_event },
+      label: 'Trigger',
+    },
+  };
+  nodes.push(triggerNode);
+
+  // Create step nodes
+  for (const step of steps) {
+    if (step.step_type === 'wait') {
+      nodes.push({
+        id: step.id,
+        type: 'wait' as const,
+        position: { x: 0, y: 0 },
+        data: {
+          type: 'wait' as const,
+          config: { hours: step.wait_hours || 24 },
+          label: 'Wait',
+        },
+      });
+    } else if (step.step_type === 'branch') {
+      nodes.push({
+        id: step.id,
+        type: 'branch' as const,
+        position: { x: 0, y: 0 },
+        data: {
+          type: 'branch' as const,
+          config: {
+            user_column: step.branch_user_column || '',
+            operator: (step.branch_operator || '=') as BranchNodeData['config']['operator'],
+            compare_value: step.branch_compare_value || '',
+          },
+          label: 'Branch',
+        },
+      });
+    } else {
+      nodes.push({
+        id: step.id,
+        type: 'send' as const,
+        position: { x: 0, y: 0 },
+        data: {
+          type: 'send' as const,
+          config: {
+            title: step.send_title || 'Notification',
+            body: step.send_body || '',
+          },
+          label: 'Send',
+        },
+      });
+    }
+  }
+
+  // Build edges from step references
+  const stepsWithIncoming = new Set<string>();
+
+  for (const step of steps) {
+    if (step.step_type === 'wait' && step.wait_next_step_id) {
+      edges.push({
+        id: `${step.id}-${step.wait_next_step_id}`,
+        source: step.id,
+        target: step.wait_next_step_id,
+        animated: true,
+        markerEnd: { type: MarkerType.ArrowClosed },
+      });
+      stepsWithIncoming.add(step.wait_next_step_id);
+    } else if (step.step_type === 'send' && step.send_next_step_id) {
+      edges.push({
+        id: `${step.id}-${step.send_next_step_id}`,
+        source: step.id,
+        target: step.send_next_step_id,
+        animated: true,
+        markerEnd: { type: MarkerType.ArrowClosed },
+      });
+      stepsWithIncoming.add(step.send_next_step_id);
+    } else if (step.step_type === 'branch') {
+      if (step.branch_true_step_id) {
+        edges.push({
+          id: `${step.id}-yes-${step.branch_true_step_id}`,
+          source: step.id,
+          target: step.branch_true_step_id,
+          sourceHandle: 'yes',
+          animated: true,
+          markerEnd: { type: MarkerType.ArrowClosed },
+        });
+        stepsWithIncoming.add(step.branch_true_step_id);
+      }
+      if (step.branch_false_step_id) {
+        edges.push({
+          id: `${step.id}-no-${step.branch_false_step_id}`,
+          source: step.id,
+          target: step.branch_false_step_id,
+          sourceHandle: 'no',
+          animated: true,
+          markerEnd: { type: MarkerType.ArrowClosed },
+        });
+        stepsWithIncoming.add(step.branch_false_step_id);
+      }
+    }
+  }
+
+  // Connect trigger to first step (step with no incoming edges)
+  for (const step of steps) {
+    if (!stepsWithIncoming.has(step.id)) {
+      edges.push({
+        id: `trigger-${step.id}`,
+        source: 'trigger',
+        target: step.id,
+        animated: true,
+        markerEnd: { type: MarkerType.ArrowClosed },
+      });
+      break; // Only connect to first root step
+    }
+  }
+
+  // Apply auto-layout
+  const layouted = getLayoutedElements(nodes, edges);
+  return layouted;
+}
+
 export function Canvas() {
+  const { id: urlId } = useParams<{ id: string }>();
+  // Treat "new" as creating a new workflow
+  const workflowId = urlId === 'new' ? undefined : urlId;
+  const navigate = useNavigate();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<CanvasNode, Edge> | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>([]);
@@ -87,6 +241,8 @@ export function Canvas() {
   const [selectedNode, setSelectedNode] = useState<CanvasNode | null>(null);
   const [userColumns, setUserColumns] = useState<UserColumn[]>([]);
   const [triggerEvents, setTriggerEvents] = useState<TriggerEvent[]>([]);
+  const [workflowName, setWorkflowName] = useState('Untitled Workflow');
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     async function fetchData() {
@@ -108,6 +264,108 @@ export function Canvas() {
     }
     fetchData();
   }, []);
+
+  // Load existing workflow
+  useEffect(() => {
+    async function loadWorkflow() {
+      if (!workflowId || !API_URL) return;
+      try {
+        const res = await fetch(`${API_URL}/workflows/${workflowId}`);
+        if (!res.ok) {
+          console.error('Failed to load workflow');
+          return;
+        }
+        const data = await res.json();
+        setWorkflowName(data.workflow.name);
+        const { nodes: layoutedNodes, edges: layoutedEdges } = dbToCanvas(data.workflow, data.steps);
+        setNodes(layoutedNodes);
+        setEdges(layoutedEdges);
+      } catch (err) {
+        console.error('Failed to load workflow:', err);
+      }
+    }
+    loadWorkflow();
+  }, [workflowId, setNodes, setEdges]);
+
+  const saveWorkflow = useCallback(async () => {
+    console.log('saveWorkflow called');
+    console.log('API_URL:', API_URL);
+    console.log('workflowId:', workflowId);
+    console.log('nodes:', nodes);
+    console.log('edges:', edges);
+
+    if (!API_URL) {
+      console.error('API_URL not configured');
+      alert('API URL not configured. Set VITE_API_URL in .env');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      // Find trigger node to get trigger_event
+      const triggerNode = nodes.find((n) => n.data.type === 'trigger');
+      const triggerEvent = triggerNode?.data.type === 'trigger'
+        ? triggerNode.data.config.event
+        : 'contact_added';
+
+      // Filter out trigger node for steps
+      const steps = nodes
+        .filter((n) => n.data.type !== 'trigger')
+        .map((n) => ({
+          id: n.id,
+          type: n.data.type as 'wait' | 'branch' | 'send',
+          config: n.data.config,
+        }));
+
+      // Filter out edges from trigger (we'll reconstruct on load)
+      const canvasEdges = edges
+        .filter((e) => e.source !== 'trigger')
+        .map((e) => ({
+          source: e.source,
+          target: e.target,
+          sourceHandle: e.sourceHandle,
+        }));
+
+      const payload = {
+        name: workflowName,
+        trigger_event: triggerEvent,
+        steps,
+        edges: canvasEdges,
+      };
+
+      console.log('Saving workflow:', payload);
+
+      const url = workflowId
+        ? `${API_URL}/workflows/${workflowId}`
+        : `${API_URL}/workflows`;
+
+      const res = await fetch(url, {
+        method: workflowId ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        console.error('Server error:', data);
+        alert(`Failed to save: ${data.error || res.statusText}`);
+        return;
+      }
+
+      console.log('Saved successfully:', data);
+
+      // If creating new workflow, navigate to edit URL
+      if (!workflowId && data.workflow?.id) {
+        navigate(`/canvas/${data.workflow.id}`, { replace: true });
+      }
+    } catch (err) {
+      console.error('Failed to save workflow:', err);
+      alert(`Failed to save: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [nodes, edges, workflowName, workflowId, navigate]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -192,13 +450,21 @@ export function Canvas() {
 
       <div className="flex-1 flex flex-col">
         {/* Toolbar */}
-        <div className="h-14 border-b border-gray-200 bg-white px-4 flex items-center gap-4">
+        <div className="h-14 border-b border-gray-200 bg-white px-4 flex items-center justify-between">
           <input
             type="text"
             placeholder="Workflow name"
             className="text-lg font-semibold border-none outline-none bg-transparent"
-            defaultValue="Untitled Workflow"
+            value={workflowName}
+            onChange={(e) => setWorkflowName(e.target.value)}
           />
+          <button
+            onClick={saveWorkflow}
+            disabled={isSaving}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isSaving ? 'Saving...' : 'Save'}
+          </button>
         </div>
 
         {/* Canvas */}

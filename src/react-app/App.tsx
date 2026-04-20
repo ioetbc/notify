@@ -22,6 +22,7 @@ function App() {
           <Route path="/loops/new" element={<NewLoop />} />
           <Route path="/workflow" element={<WorkflowPage />} />
           <Route path="/canvas" element={<Canvas />} />
+          <Route path="/canvas/:id" element={<Canvas />} />
         </Route>
       </Routes>
     </BrowserRouter>

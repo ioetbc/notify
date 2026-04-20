@@ -53,58 +53,58 @@ async function seed() {
   `;
   console.log('Created user attributes');
 
-  // Create a workflow: "Upgrade Prompt"
-  // Trigger: contact_added -> Wait 24h -> Branch (plan != pro) -> Send notification
-  const [workflow] = await sql`
-    INSERT INTO workflow (customer_id, name, trigger_event, active)
-    VALUES (${customer.id}, 'Upgrade Prompt', 'contact_added', true)
-    RETURNING id
-  `;
-  console.log('Created workflow:', workflow.id);
+  // // Create a workflow: "Upgrade Prompt"
+  // // Trigger: contact_added -> Wait 24h -> Branch (plan != pro) -> Send notification
+  // const [workflow] = await sql`
+  //   INSERT INTO workflow (customer_id, name, trigger_event, active)
+  //   VALUES (${customer.id}, 'Upgrade Prompt', 'contact_added', true)
+  //   RETURNING id
+  // `;
+  // console.log('Created workflow:', workflow.id);
 
-  // Create steps
-  const [stepWait] = await sql`
-    INSERT INTO step (workflow_id, step_type, step_order)
-    VALUES (${workflow.id}, 'wait', 1)
-    RETURNING id
-  `;
-  const [stepBranch] = await sql`
-    INSERT INTO step (workflow_id, step_type, step_order)
-    VALUES (${workflow.id}, 'branch', 2)
-    RETURNING id
-  `;
-  const [stepSend] = await sql`
-    INSERT INTO step (workflow_id, step_type, step_order)
-    VALUES (${workflow.id}, 'send', 3)
-    RETURNING id
-  `;
-  console.log('Created steps:', stepWait.id, stepBranch.id, stepSend.id);
+  // // Create steps
+  // const [stepWait] = await sql`
+  //   INSERT INTO step (workflow_id, step_type, step_order)
+  //   VALUES (${workflow.id}, 'wait', 1)
+  //   RETURNING id
+  // `;
+  // const [stepBranch] = await sql`
+  //   INSERT INTO step (workflow_id, step_type, step_order)
+  //   VALUES (${workflow.id}, 'branch', 2)
+  //   RETURNING id
+  // `;
+  // const [stepSend] = await sql`
+  //   INSERT INTO step (workflow_id, step_type, step_order)
+  //   VALUES (${workflow.id}, 'send', 3)
+  //   RETURNING id
+  // `;
+  // console.log('Created steps:', stepWait.id, stepBranch.id, stepSend.id);
 
-  // Configure wait step: 24 hours, then go to branch
-  await sql`
-    INSERT INTO step_wait (step_id, hours, next_step_id)
-    VALUES (${stepWait.id}, 24, ${stepBranch.id})
-  `;
+  // // Configure wait step: 24 hours, then go to branch
+  // await sql`
+  //   INSERT INTO step_wait (step_id, hours, next_step_id)
+  //   VALUES (${stepWait.id}, 24, ${stepBranch.id})
+  // `;
 
-  // Configure branch step: if plan != 'pro', go to send; otherwise exit
-  await sql`
-    INSERT INTO step_branch (step_id, attribute_definition_id, operator, compare_value, true_step_id, false_step_id)
-    VALUES (${stepBranch.id}, ${attrPlan.id}, '!=', 'pro', ${stepSend.id}, NULL)
-  `;
+  // // Configure branch step: if plan != 'pro', go to send; otherwise exit
+  // await sql`
+  //   INSERT INTO step_branch (step_id, attribute_definition_id, operator, compare_value, true_step_id, false_step_id)
+  //   VALUES (${stepBranch.id}, ${attrPlan.id}, '!=', 'pro', ${stepSend.id}, NULL)
+  // `;
 
-  // Configure send step: notification content, no next step (end)
-  await sql`
-    INSERT INTO step_send (step_id, title, body, next_step_id)
-    VALUES (${stepSend.id}, 'Upgrade to Pro!', 'Get 50% off your first month of Pro. Limited time offer!', NULL)
-  `;
-  console.log('Configured step details');
+  // // Configure send step: notification content, no next step (end)
+  // await sql`
+  //   INSERT INTO step_send (step_id, title, body, next_step_id)
+  //   VALUES (${stepSend.id}, 'Upgrade to Pro!', 'Get 50% off your first month of Pro. Limited time offer!', NULL)
+  // `;
+  // console.log('Configured step details');
 
-  // Create an enrollment for the user (free plan, should get notification)
-  await sql`
-    INSERT INTO workflow_enrollment (user_id, workflow_id, current_step_id, status, process_at)
-    VALUES (${user.id}, ${workflow.id}, ${stepWait.id}, 'active', NOW())
-  `;
-  console.log('Created enrollment for user (free plan)');
+  // // Create an enrollment for the user (free plan, should get notification)
+  // await sql`
+  //   INSERT INTO workflow_enrollment (user_id, workflow_id, current_step_id, status, process_at)
+  //   VALUES (${user.id}, ${workflow.id}, ${stepWait.id}, 'active', NOW())
+  // `;
+  // console.log('Created enrollment for user (free plan)');
 
   console.log('Seed complete!');
   await sql.end();
