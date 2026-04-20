@@ -3,106 +3,113 @@
 ## Overview
 PostgreSQL database using **Neon** (serverless Postgres) with SST for infrastructure, raw SQL migrations. No ORM.
 
-## Why Neon?
-- Serverless with scale-to-zero (great for dev/staging)
-- Built-in connection pooling (no RDS Proxy needed)
-- No VPC configuration required
-- Generous free tier (0.5 GB storage, 190 compute hours)
-- Works directly over HTTPS - perfect for Lambda/Edge
-
 ---
 
-## Multi-tenancy Model
-- `customer_id` on all tables for B2B isolation
-- Each customer is a business using the platform
+## Enums
+
+```sql
+CREATE TYPE step_type AS ENUM ('wait', 'branch', 'send');
+CREATE TYPE trigger_event AS ENUM ('contact_added', 'contact_updated', 'event_received');
+CREATE TYPE enrollment_status AS ENUM ('active', 'completed', 'exited');
+CREATE TYPE branch_operator AS ENUM ('=', '!=', 'exists', 'not_exists');
+CREATE TYPE gender AS ENUM ('male', 'female', 'other');
+```
 
 ---
 
 ## Tables
 
-### 1. `customers`
-Businesses using the platform.
-
+### `customer`
 ```sql
-CREATE TABLE customers (
+CREATE TABLE customer (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name TEXT NOT NULL,
-    api_key TEXT UNIQUE NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    email VARCHAR(255) UNIQUE NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    api_key TEXT UNIQUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ```
 
-### 2. `users`
-End users who receive notifications.
-
+### `user`
 ```sql
-CREATE TABLE users (
+CREATE TABLE "user" (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    customer_id UUID NOT NULL REFERENCES customers(id),
+    customer_id UUID NOT NULL REFERENCES customer(id) ON DELETE CASCADE,
     external_id TEXT NOT NULL,
+    gender gender,
+    plan TEXT,
+    phone TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(customer_id, external_id)
 );
 ```
 
-### 3. `push_tokens`
-Device tokens for push notifications.
-
+### `workflow`
 ```sql
-CREATE TABLE push_tokens (
+CREATE TABLE workflow (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    token TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(user_id, token)
-);
-```
-
-### 4. `journeys`
-A journey is a simple rule: trigger event + delay + message.
-
-```sql
-CREATE TABLE journeys (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    customer_id UUID NOT NULL REFERENCES customers(id),
+    customer_id UUID NOT NULL REFERENCES customer(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    trigger_event TEXT NOT NULL,      -- "user_created", "cart_abandoned"
-    delay_hours INT DEFAULT 0,        -- wait this long before sending
-    notification_title TEXT NOT NULL,
-    notification_body TEXT NOT NULL,
+    trigger_event trigger_event NOT NULL,
     active BOOLEAN DEFAULT false,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ```
 
-### 5. `journey_enrollments`
-Tracks users scheduled to receive journey notifications.
-
+### `step`
 ```sql
-CREATE TABLE journey_enrollments (
+CREATE TABLE step (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id),
-    journey_id UUID NOT NULL REFERENCES journeys(id),
-    send_at TIMESTAMPTZ NOT NULL,     -- when to send the notification
-    sent BOOLEAN DEFAULT false,
+    workflow_id UUID NOT NULL REFERENCES workflow(id) ON DELETE CASCADE,
+    step_type step_type NOT NULL,
+    step_order INT NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
-
-CREATE INDEX idx_enrollments_pending ON journey_enrollments(send_at)
-    WHERE sent = false;
 ```
 
-### 6. `notifications`
-Log of sent notifications.
-
+### `step_wait`
 ```sql
-CREATE TABLE notifications (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id),
-    enrollment_id UUID REFERENCES journey_enrollments(id),
+CREATE TABLE step_wait (
+    step_id UUID PRIMARY KEY REFERENCES step(id) ON DELETE CASCADE,
+    hours INT NOT NULL CHECK (hours > 0),
+    next_step_id UUID REFERENCES step(id) ON DELETE SET NULL
+);
+```
+
+### `step_branch`
+```sql
+CREATE TABLE step_branch (
+    step_id UUID PRIMARY KEY REFERENCES step(id) ON DELETE CASCADE,
+    user_column TEXT NOT NULL,
+    operator branch_operator NOT NULL,
+    compare_value TEXT,
+    true_step_id UUID REFERENCES step(id) ON DELETE SET NULL,
+    false_step_id UUID REFERENCES step(id) ON DELETE SET NULL
+);
+```
+
+### `step_send`
+```sql
+CREATE TABLE step_send (
+    step_id UUID PRIMARY KEY REFERENCES step(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     body TEXT NOT NULL,
-    sent_at TIMESTAMPTZ DEFAULT NOW()
+    next_step_id UUID REFERENCES step(id) ON DELETE SET NULL
+);
+```
+
+### `workflow_enrollment`
+```sql
+CREATE TABLE workflow_enrollment (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    workflow_id UUID NOT NULL REFERENCES workflow(id) ON DELETE CASCADE,
+    current_step_id UUID REFERENCES step(id) ON DELETE SET NULL,
+    status enrollment_status NOT NULL DEFAULT 'active',
+    process_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, workflow_id)
 );
 ```
 
@@ -110,18 +117,11 @@ CREATE TABLE notifications (
 
 ## How It Works
 
-1. User triggers event (e.g. `"user_created"`)
-2. System finds active journeys with matching `trigger_event`
-3. Creates enrollment with `send_at = now() + delay_hours`
-4. Background job picks up enrollments where `send_at < now() AND sent = false`
-5. Sends notification, marks `sent = true`
-
----
-
-## Neon Connection Strings
-
-Neon provides two endpoints:
-- **Direct**: `postgres://user:pass@ep-xxx.region.aws.neon.tech/dbname` (for migrations, admin)
-- **Pooled**: `postgres://user:pass@ep-xxx.region.aws.neon.tech/dbname?pgbouncer=true` (for Lambda, serverless)
-
-Use the pooled endpoint for Lambda functions.
+1. API call with event → find active workflows with matching `trigger_event`
+2. Create enrollment with `current_step_id` = first step
+3. Worker picks up enrollments where `process_at < now() AND status = 'active'`
+4. Execute step:
+   - `wait`: set `process_at = now + hours`, advance to `next_step_id`
+   - `branch`: check `user.{user_column}` against condition, follow `true_step_id` or `false_step_id`
+   - `send`: dispatch notification, advance to `next_step_id`
+5. When `next_step_id` is NULL → mark enrollment `completed`

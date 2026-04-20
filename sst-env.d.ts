@@ -6,6 +6,10 @@
 
 declare module "sst" {
   export interface Resource {
+    "Frontend": {
+      "type": "sst.aws.StaticSite"
+      "url": string
+    }
     "MyApi": {
       "name": string
       "type": "sst.aws.Function"

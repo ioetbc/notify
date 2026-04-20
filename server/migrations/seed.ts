@@ -12,23 +12,13 @@ async function seed() {
   `;
   console.log('Created customer:', customer.id);
 
-  // Create some users
-  const [user1] = await sql`
+  // Create a user
+  const [user] = await sql`
     INSERT INTO "user" (customer_id, external_id, gender, plan, phone)
     VALUES (${customer.id}, 'user_001', 'male', 'free', '+1234567890')
     RETURNING id
   `;
-  const [user2] = await sql`
-    INSERT INTO "user" (customer_id, external_id, gender, plan, phone)
-    VALUES (${customer.id}, 'user_002', 'female', 'pro', '+0987654321')
-    RETURNING id
-  `;
-  const [user3] = await sql`
-    INSERT INTO "user" (customer_id, external_id, gender, plan)
-    VALUES (${customer.id}, 'user_003', 'male', 'free')
-    RETURNING id
-  `;
-  console.log('Created users:', user1.id, user2.id, user3.id);
+  console.log('Created user:', user.id);
 
   // Create a workflow: "Upgrade Prompt"
   // Trigger: contact_added -> Wait 24h -> Branch (plan != pro) -> Send notification
@@ -76,12 +66,12 @@ async function seed() {
   `;
   console.log('Configured step details');
 
-  // Create an enrollment for user1 (free plan, should get notification)
+  // Create an enrollment for the user (free plan, should get notification)
   await sql`
     INSERT INTO workflow_enrollment (user_id, workflow_id, current_step_id, status, process_at)
-    VALUES (${user1.id}, ${workflow.id}, ${stepWait.id}, 'active', NOW())
+    VALUES (${user.id}, ${workflow.id}, ${stepWait.id}, 'active', NOW())
   `;
-  console.log('Created enrollment for user1 (free plan)');
+  console.log('Created enrollment for user (free plan)');
 
   console.log('Seed complete!');
   await sql.end();

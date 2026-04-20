@@ -55,6 +55,105 @@ app
   .get('/workflows', async (c) => {
     const workflows = await sql`SELECT * FROM workflow LIMIT 10`;
     return c.json({ workflows });
+  })
+  .get('/enums', async (c) => {
+    // Fetch enum values from PostgreSQL
+    const triggerEvents = await sql`
+      SELECT enumlabel as value FROM pg_enum
+      WHERE enumtypid = 'trigger_event'::regtype
+      ORDER BY enumsortorder
+    `;
+    const stepTypes = await sql`
+      SELECT enumlabel as value FROM pg_enum
+      WHERE enumtypid = 'step_type'::regtype
+      ORDER BY enumsortorder
+    `;
+    const branchOperators = await sql`
+      SELECT enumlabel as value FROM pg_enum
+      WHERE enumtypid = 'branch_operator'::regtype
+      ORDER BY enumsortorder
+    `;
+
+    return c.json({
+      trigger_event: triggerEvents.map((r) => r.value),
+      step_type: stepTypes.map((r) => r.value),
+      branch_operator: branchOperators.map((r) => r.value),
+    });
+  })
+  .put('/workflows/:id', async (c) => {
+    const workflowId = c.req.param('id');
+    const body = await c.req.json();
+
+    const [workflow] = await sql`
+      UPDATE workflow
+      SET trigger_event = ${body.trigger_event}
+      WHERE id = ${workflowId}
+      RETURNING *
+    `;
+
+    if (!workflow) {
+      return c.json({ error: 'Workflow not found' }, 404);
+    }
+
+    return c.json({ workflow });
+  })
+  .put('/steps/:id', async (c) => {
+    const stepId = c.req.param('id');
+    const body = await c.req.json();
+
+    // Get the step to know its type
+    const [step] = await sql`SELECT * FROM step WHERE id = ${stepId}`;
+    if (!step) {
+      return c.json({ error: 'Step not found' }, 404);
+    }
+
+    // Update the appropriate step config table based on step type
+    if (step.step_type === 'wait' && body.hours !== undefined) {
+      await sql`
+        UPDATE step_wait
+        SET hours = ${body.hours}
+        WHERE step_id = ${stepId}
+      `;
+    } else if (step.step_type === 'branch') {
+      if (body.user_column !== undefined) {
+        await sql`
+          UPDATE step_branch
+          SET user_column = ${body.user_column}
+          WHERE step_id = ${stepId}
+        `;
+      }
+      if (body.operator !== undefined) {
+        await sql`
+          UPDATE step_branch
+          SET operator = ${body.operator}
+          WHERE step_id = ${stepId}
+        `;
+      }
+      if (body.compare_value !== undefined) {
+        await sql`
+          UPDATE step_branch
+          SET compare_value = ${body.compare_value}
+          WHERE step_id = ${stepId}
+        `;
+      }
+    } else if (step.step_type === 'send') {
+      if (body.title !== undefined) {
+        await sql`
+          UPDATE step_send
+          SET title = ${body.title}
+          WHERE step_id = ${stepId}
+        `;
+      }
+      if (body.body !== undefined) {
+        await sql`
+          UPDATE step_send
+          SET body = ${body.body}
+          WHERE step_id = ${stepId}
+        `;
+      }
+    }
+
+    return c.json({ success: true });
   });
 
 export const handler = handle(app);

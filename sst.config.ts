@@ -24,10 +24,26 @@ export default $config({
       },
     });
 
-    new sst.aws.Function('MyApi', {
+    const api = new sst.aws.Function('MyApi', {
       handler: 'server/functions/index.handler',
       link: [db],
-      url: true,
+      url: {
+        cors: {
+          allowOrigins: ['*'],
+          allowMethods: ['GET', 'POST', 'PUT', 'DELETE'],
+          allowHeaders: ['Content-Type'],
+        },
+      },
+    });
+
+    new sst.aws.StaticSite('Frontend', {
+      build: {
+        command: 'bun run build',
+        output: 'dist',
+      },
+      environment: {
+        VITE_API_URL: api.url,
+      },
     });
   },
 });
