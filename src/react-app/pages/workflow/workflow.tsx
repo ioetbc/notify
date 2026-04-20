@@ -295,7 +295,7 @@ function StepEditPopover({
   onClose: () => void;
   saving: boolean;
 }) {
-  const [formData, setFormData] = useState(() => {
+  const getInitialFormData = (): Record<string, string> => {
     if (step.step_type === 'wait') {
       return { hours: step.wait_hours?.toString() || '' };
     }
@@ -313,7 +313,8 @@ function StepEditPopover({
       };
     }
     return {};
-  });
+  };
+  const [formData, setFormData] = useState<Record<string, string>>(getInitialFormData);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
