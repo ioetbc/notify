@@ -24,8 +24,9 @@ export default $config({
       },
     });
 
-    const api = new sst.aws.Function('MyApi', {
-      handler: 'server/functions/index.handler',
+    // Admin API - internal endpoints for the admin portal (workflow builder, etc.)
+    const adminApi = new sst.aws.Function('AdminApi', {
+      handler: 'server/functions/admin/index.handler',
       link: [db],
       url: {
         cors: {
@@ -36,13 +37,27 @@ export default $config({
       },
     });
 
+    // Public API - customer-facing endpoints (user attributes, definitions, etc.)
+    // TODO: Implement when ready
+    // const publicApi = new sst.aws.Function('PublicApi', {
+    //   handler: 'server/functions/public/index.handler',
+    //   link: [db],
+    //   url: {
+    //     cors: {
+    //       allowOrigins: ['*'],
+    //       allowMethods: ['GET', 'POST', 'PUT', 'DELETE'],
+    //       allowHeaders: ['Content-Type', 'Authorization'],
+    //     },
+    //   },
+    // });
+
     new sst.aws.StaticSite('Frontend', {
       build: {
         command: 'bun run build',
         output: 'dist',
       },
       environment: {
-        VITE_API_URL: api.url,
+        VITE_API_URL: adminApi.url,
       },
     });
   },

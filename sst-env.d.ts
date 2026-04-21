@@ -6,13 +6,13 @@
 
 declare module "sst" {
   export interface Resource {
-    "Frontend": {
-      "type": "sst.aws.StaticSite"
-      "url": string
-    }
-    "MyApi": {
+    "AdminApi": {
       "name": string
       "type": "sst.aws.Function"
+      "url": string
+    }
+    "Frontend": {
+      "type": "sst.aws.StaticSite"
       "url": string
     }
     "NeonDB": {
