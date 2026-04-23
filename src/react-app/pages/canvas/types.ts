@@ -1,4 +1,13 @@
 import type { Node, Edge } from '@xyflow/react';
+import type {
+  WaitConfig,
+  BranchConfig,
+  SendConfig,
+  StepConfig,
+} from '../../../../server/db/schema';
+
+// Re-export config types for convenience
+export type { WaitConfig, BranchConfig, SendConfig, StepConfig };
 
 // Enums matching server/database schema
 export type StepType = 'wait' | 'branch' | 'send' | 'trigger';
@@ -8,21 +17,6 @@ export type BranchOperator = '=' | '!=' | 'exists' | 'not_exists';
 // Step configurations
 export interface TriggerConfig {
   event: TriggerEvent;
-}
-
-export interface WaitConfig {
-  hours: number;
-}
-
-export interface BranchConfig {
-  user_column: string;
-  operator: BranchOperator;
-  compare_value?: string;
-}
-
-export interface SendConfig {
-  title: string;
-  body: string;
 }
 
 // Node data types - must extend Record<string, unknown> for xyflow

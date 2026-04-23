@@ -13,7 +13,8 @@
     "react-dom": "19.2.1",
     "react-router-dom": "^7.14.0",
     "sst": "4.8.0",
-    "tailwindcss": "^4.2.2"
+    "tailwindcss": "^4.2.2",
+    "ts-pattern": "^5.9.0"
   },
   "devDependencies": {
     "@eslint/js": "9.39.1",

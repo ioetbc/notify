@@ -77,13 +77,22 @@ export const workflow = pgTable("workflow", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
+export type WaitConfig = { hours: number };
+export type BranchConfig = {
+  user_column: string;
+  operator: "=" | "!=" | "exists" | "not_exists";
+  compare_value?: string;
+};
+export type SendConfig = { title: string; body: string };
+export type StepConfig = WaitConfig | BranchConfig | SendConfig;
+
 export const step = pgTable("step", {
   id: uuid("id").primaryKey().defaultRandom(),
   workflowId: uuid("workflow_id")
     .notNull()
     .references(() => workflow.id, { onDelete: "cascade" }),
   type: stepTypeEnum("type").notNull(),
-  config: jsonb("config").notNull(),
+  config: jsonb("config").$type<StepConfig>().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
