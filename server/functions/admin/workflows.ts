@@ -3,6 +3,12 @@ import { zValidator } from "@hono/zod-validator";
 import * as service from "../../services/workflow";
 import { createWorkflowSchema, updateWorkflowSchema } from "../../schemas/workflow";
 
+function getCustomerId(c: { req: { header: (name: string) => string | undefined } }) {
+  const customerId = c.req.header('x-customer-id');
+  if (!customerId) throw new Error('Missing X-Customer-Id header');
+  return customerId;
+}
+
 const workflows = new Hono()
   .get("/:id", async (c) => {
     const result = await service.getWorkflow(c.req.param("id"));
@@ -21,8 +27,9 @@ const workflows = new Hono()
     "/",
     zValidator("json", createWorkflowSchema),
     async (c) => {
+      const customerId = getCustomerId(c);
       const body = c.req.valid("json");
-      const workflow = await service.createWorkflow(body);
+      const workflow = await service.createWorkflow(customerId, body);
       return c.json({ workflow }, 200);
     }
   )

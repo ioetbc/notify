@@ -19,6 +19,11 @@ declare module "sst" {
       "connectionString": string
       "type": "sst.sst.Linkable"
     }
+    "PublicApi": {
+      "name": string
+      "type": "sst.aws.Function"
+      "url": string
+    }
   }
 }
 /// <reference path="sst-env.d.ts" />

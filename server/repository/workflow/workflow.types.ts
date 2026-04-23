@@ -1,8 +1,10 @@
+import type { StepConfig } from "../../db/schema";
+
 export type StepInput = {
   id: string;
   workflowId: string;
   type: "wait" | "branch" | "send";
-  config: Record<string, unknown>;
+  config: StepConfig;
 };
 
 export type EdgeInput = {

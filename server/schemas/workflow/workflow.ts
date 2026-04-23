@@ -44,14 +44,14 @@ export const canvasEdgeSchema = z.object({
 
 export const createWorkflowSchema = z.object({
   name: z.string(),
-  trigger_event: z.enum(schema.triggerEventEnum.enumValues),
+  trigger_event: z.string().min(1),
   steps: z.array(canvasStepSchema),
   edges: z.array(canvasEdgeSchema),
 });
 
 export const updateWorkflowSchema = z.object({
   name: z.string(),
-  trigger_event: z.enum(schema.triggerEventEnum.enumValues),
+  trigger_event: z.string().min(1),
   steps: z.array(canvasStepSchema),
   edges: z.array(canvasEdgeSchema),
 });

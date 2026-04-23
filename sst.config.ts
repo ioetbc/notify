@@ -37,19 +37,18 @@ export default $config({
       },
     });
 
-    // Public API - customer-facing endpoints (user attributes, definitions, etc.)
-    // TODO: Implement when ready
-    // const publicApi = new sst.aws.Function('PublicApi', {
-    //   handler: 'server/functions/public/index.handler',
-    //   link: [db],
-    //   url: {
-    //     cors: {
-    //       allowOrigins: ['*'],
-    //       allowMethods: ['GET', 'POST', 'PUT', 'DELETE'],
-    //       allowHeaders: ['Content-Type', 'Authorization'],
-    //     },
-    //   },
-    // });
+    // Public API - customer-facing endpoints (user attributes, events, etc.)
+    const publicApi = new sst.aws.Function('PublicApi', {
+      handler: 'server/functions/public/index.handler',
+      link: [db],
+      url: {
+        cors: {
+          allowOrigins: ['*'],
+          allowMethods: ['GET', 'POST', 'PATCH'],
+          allowHeaders: ['Content-Type', 'Authorization'],
+        },
+      },
+    });
 
     new sst.aws.StaticSite('Frontend', {
       build: {

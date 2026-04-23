@@ -4,7 +4,6 @@ import type {
   WaitNodeData,
   BranchNodeData,
   SendNodeData,
-  StepNodeData,
 } from './types';
 import type { CanvasNode, UserColumn } from './utils';
 import { formatTriggerEvent, TRIGGER_EVENTS } from './utils';
@@ -114,9 +113,6 @@ function BranchConfig({
   const operators = ['=', '!=', 'exists', 'not_exists'] as const;
   const needsValue = config.operator === '=' || config.operator === '!=';
 
-  const selectedAttribute = userColumns.find((col) => col.name === config.user_column);
-  const dataType = selectedAttribute?.dataType;
-
   return (
     <div className="space-y-3">
       <div>
@@ -128,8 +124,8 @@ function BranchConfig({
         >
           <option value="">Select an attribute...</option>
           {userColumns.map((col) => (
-            <option key={col.id} value={col.name}>
-              {col.name} ({col.dataType})
+            <option key={col.name} value={col.name}>
+              {col.name}
             </option>
           ))}
         </select>
@@ -150,38 +146,16 @@ function BranchConfig({
           ))}
         </select>
       </div>
-      {needsValue && selectedAttribute && (
+      {needsValue && config.user_column && (
         <div>
           <label className="block text-sm text-gray-700 mb-1">Compare Value</label>
-          {dataType === 'boolean' && (
-            <select
-              value={config.compare_value || ''}
-              onChange={(e) => onUpdate({ ...config, compare_value: e.target.value })}
-              className="w-full border border-gray-300 rounded px-3 py-2"
-            >
-              <option value="">Select...</option>
-              <option value="true">true</option>
-              <option value="false">false</option>
-            </select>
-          )}
-          {dataType === 'number' && (
-            <input
-              type="number"
-              value={config.compare_value || ''}
-              onChange={(e) => onUpdate({ ...config, compare_value: e.target.value })}
-              className="w-full border border-gray-300 rounded px-3 py-2"
-              placeholder="Enter a number"
-            />
-          )}
-          {dataType === 'text' && (
-            <input
-              type="text"
-              value={config.compare_value || ''}
-              onChange={(e) => onUpdate({ ...config, compare_value: e.target.value })}
-              className="w-full border border-gray-300 rounded px-3 py-2"
-              placeholder="Enter text"
-            />
-          )}
+          <input
+            type="text"
+            value={config.compare_value || ''}
+            onChange={(e) => onUpdate({ ...config, compare_value: e.target.value })}
+            className="w-full border border-gray-300 rounded px-3 py-2"
+            placeholder="Enter value"
+          />
         </div>
       )}
     </div>

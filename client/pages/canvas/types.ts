@@ -4,14 +4,14 @@ import type {
   BranchConfig,
   SendConfig,
   StepConfig,
-} from '../../../../server/db/schema';
+} from '../../../server/db/schema';
 
 // Re-export config types for convenience
 export type { WaitConfig, BranchConfig, SendConfig, StepConfig };
 
 // Enums matching server/database schema
 export type StepType = 'wait' | 'branch' | 'send' | 'trigger';
-export type TriggerEvent = 'contact_added' | 'contact_updated' | 'event_received';
+export type TriggerEvent = string;
 export type BranchOperator = '=' | '!=' | 'exists' | 'not_exists';
 
 // Step configurations

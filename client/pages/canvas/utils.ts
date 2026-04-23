@@ -16,9 +16,7 @@ export const TRIGGER_EVENTS: TriggerEvent[] = ['contact_added', 'contact_updated
 export type CanvasNode = Node<StepNodeData, StepType>;
 
 export interface UserColumn {
-  id: string;
   name: string;
-  dataType: string;
 }
 
 export function formatTriggerEvent(event: string): string {

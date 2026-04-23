@@ -4,7 +4,7 @@ import type { Edge } from '@xyflow/react';
 import { match } from 'ts-pattern';
 
 import { client, queryClient } from '../../lib/api';
-import type { CanvasStep } from '../../../../server/services/workflow/workflow.types';
+import type { CanvasStep } from '../../../server/services/workflow/workflow.types';
 import type { TriggerEvent } from './types';
 import { dbToCanvas, type CanvasNode, type ApiStep, type ApiEdge, type UserColumn } from './utils';
 

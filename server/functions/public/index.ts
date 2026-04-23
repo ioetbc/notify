@@ -1,22 +1,82 @@
 import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
-import { db } from "../../db";
-
+import { zValidator } from "@hono/zod-validator";
+import * as service from "../../services/public";
+import {
+  updateUserAttributesSchema,
+  trackEventSchema,
+} from "../../schemas/public";
 const app = new Hono();
 
-// Public API - customer-facing endpoints
-// These endpoints will be called by customers from their codebase
-// to update user attributes and definitions
+function getCustomerId(c: { req: { header: (name: string) => string | undefined } }) {
+  const customerId = c.req.header('x-customer-id');
+  if (!customerId) throw new Error('Missing X-Customer-Id header');
+  return customerId;
+}
 
-app.get("/", (c) => {
-  return c.json({ api: "public", version: "1.0.0" });
-});
+function errorResponse(code: string, message: string, status: number) {
+  return { error: { code, message }, _status: status } as const;
+}
 
-// TODO: Add authentication middleware for API key validation
+const routes = app
+  .patch(
+    "/v1/users/:external_id",
+    zValidator("json", updateUserAttributesSchema),
+    async (c) => {
+      const customerId = getCustomerId(c);
+      const externalId = c.req.param("external_id");
+      const { attributes } = c.req.valid("json");
 
-// TODO: POST /users/:id/attributes - Update user attributes
-// TODO: GET /users/:id/attributes - Get user attributes
-// TODO: POST /definitions - Create attribute definitions
-// TODO: GET /definitions - List attribute definitions
+      console.log('customerId', customerId)
+      console.log('externalId', externalId)
 
+      const result = await service.updateUserAttributes(
+        customerId,
+        externalId,
+        attributes
+      );
+
+      if (!result) {
+        return c.json(
+          {
+            error: {
+              code: "user_not_found",
+              message: `No user found with external_id '${externalId}'`,
+            },
+          },
+          404
+        );
+      }
+
+      return c.json(result, 200);
+    }
+  )
+  .post("/v1/events", zValidator("json", trackEventSchema), async (c) => {
+    const customerId = getCustomerId(c);
+    const body = c.req.valid("json");
+
+    const result = await service.trackEvent(
+      customerId,
+      body.external_id,
+      body.event,
+      body.properties,
+      body.timestamp
+    );
+
+    if (!result) {
+      return c.json(
+        {
+          error: {
+            code: "user_not_found",
+            message: `No user found with external_id '${body.external_id}'`,
+          },
+        },
+        404
+      );
+    }
+
+    return c.json(result, 202);
+  });
+
+export type PublicAppType = typeof routes;
 export const handler = handle(app);

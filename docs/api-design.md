@@ -29,7 +29,7 @@ PATCH /v1/users/:external_id
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `attributes` | object | Yes | Key-value pairs to set on the user |
+| `attributes` | object | Yes | Key-value pairs to set on the user. Values must be `string`, `number`, or `boolean`. |
 
 **Response (200 OK):**
 ```json
@@ -47,9 +47,10 @@ PATCH /v1/users/:external_id
 ```
 
 **Behavior:**
-- Attributes are merged (not replaced) — existing attributes not in the request are preserved
-- Attribute values can be: string, number, or boolean
-- Setting a value to `null` removes that attribute
+- Attributes are merged (not replaced) -- existing attributes not in the request are preserved
+- Attributes are stored as a JSONB column on the `user` table
+- Values validated as `string | number | boolean` via Zod
+- Returns 404 if user with `external_id` doesn't exist
 
 ---
 
@@ -79,7 +80,7 @@ POST /v1/events
 |-------|------|----------|-------------|
 | `external_id` | string | Yes | Customer's internal user ID |
 | `event` | string | Yes | Event name (e.g., `purchase_completed`) |
-| `properties` | object | No | Event-specific data |
+| `properties` | object | No | Event-specific data (stored as JSONB) |
 | `timestamp` | string | No | ISO 8601 timestamp (defaults to now) |
 
 **Response (202 Accepted):**
@@ -95,9 +96,10 @@ POST /v1/events
 
 **Behavior:**
 - Event is logged to the `event` table
-- System finds all active workflows where `trigger_event` matches the event name
-- Creates `workflow_enrollment` records for matching workflows
-- Returns 202 immediately (processing is async)
+- System finds all active workflows where `trigger_event` matches the event name (simple string match)
+- Creates `workflow_enrollment` records for matching workflows (skips if user already enrolled via unique constraint)
+- Returns 202 immediately
+- Returns 404 if user with `external_id` doesn't exist
 
 **Event name format:**
 - Lowercase alphanumeric with underscores
@@ -129,56 +131,28 @@ All errors follow a consistent format:
 
 ---
 
-## Database Schema Changes Required
+## Authentication
 
-### New: `event` table
-
-```sql
-CREATE TABLE event (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    customer_id UUID NOT NULL REFERENCES customer(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
-    event_name TEXT NOT NULL,
-    properties JSONB,
-    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_event_user_id ON event(user_id);
-CREATE INDEX idx_event_customer_event ON event(customer_id, event_name);
-CREATE INDEX idx_event_timestamp ON event(timestamp);
-```
-
-### New: `platform` enum
-
-```sql
-CREATE TYPE platform AS ENUM ('ios', 'android');
-```
-
-### Update: `user` table
-
-```sql
-ALTER TABLE "user" ADD COLUMN push_token TEXT;
-ALTER TABLE "user" ADD COLUMN platform platform;
-ALTER TABLE "user" ADD COLUMN token_updated_at TIMESTAMPTZ;
-```
-
-### Update: `workflow.trigger_event`
-
-Currently uses enum `trigger_event` with hardcoded values: `contact_added`, `contact_updated`, `event_received`.
-
-**Change:** Convert to TEXT to allow customer-defined event names.
-
-```sql
--- Drop the enum constraint and use TEXT
-ALTER TABLE workflow ALTER COLUMN trigger_event TYPE TEXT;
-DROP TYPE trigger_event;
-```
+MVP stub: all requests must include an `X-Customer-Id` header with the customer UUID. The frontend sends this automatically via a hardcoded constant (`00000000-0000-0000-0000-000000000001`). Will be replaced with API key-based auth (`customer.api_key` column exists).
 
 ---
 
-## Implementation Priority
+## Schema Changes Required
 
-1. **Migration** — Add `event` table, `platform` enum, update `user` table, convert `trigger_event` to TEXT
-2. **PATCH /v1/users/:external_id** — Update user attributes
-3. **POST /v1/events** — Event tracking + workflow enrollment triggering
+### New: `event` table
+
+Stores every event received per user.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `customer_id` | UUID | FK to `customer` |
+| `user_id` | UUID | FK to `user` |
+| `event_name` | TEXT | Event name (e.g., `purchase_completed`) |
+| `properties` | JSONB | Event-specific data |
+| `timestamp` | TIMESTAMPTZ | When the event occurred |
+| `created_at` | TIMESTAMPTZ | When we received it |
+
+### Change: `workflow.trigger_event`
+
+Convert from `trigger_event` enum (`contact_added`, `contact_updated`, `event_received`) to `TEXT` to support customer-defined event names like `purchase_completed`.

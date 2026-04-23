@@ -24,7 +24,7 @@ export async function createWorkflow(values: NewWorkflow) {
 
 export async function updateWorkflow(
   workflowId: string,
-  values: { name: string; triggerEvent: NewWorkflow["triggerEvent"] }
+  values: { name: string; triggerEvent: string }
 ) {
   const [updated] = await db
     .update(workflow)
@@ -57,8 +57,4 @@ export async function insertEdges(edges: EdgeInput[]) {
 
 export async function deleteStepsByWorkflowId(workflowId: string) {
   await db.delete(step).where(eq(step.workflowId, workflowId));
-}
-
-export async function findFirstCustomer() {
-  return db.query.customer.findFirst();
 }

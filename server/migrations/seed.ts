@@ -4,10 +4,11 @@ import { Resource } from 'sst';
 const sql = postgres(Resource.NeonDB.connectionString);
 
 async function seed() {
-  // Create a test customer
+  // Create a test customer with a stable ID
+  const CUSTOMER_ID = '00000000-0000-0000-0000-000000000001';
   const [customer] = await sql`
-    INSERT INTO customer (email, name, api_key)
-    VALUES ('test@example.com', 'Test Company', 'test_api_key_123')
+    INSERT INTO customer (id, email, name, api_key)
+    VALUES (${CUSTOMER_ID}, 'test@example.com', 'Test Company', 'test_api_key_123')
     RETURNING id
   `;
   console.log('Created customer:', customer.id);
@@ -21,37 +22,39 @@ async function seed() {
   console.log('Created user:', user.id);
 
   // Create attribute definitions
-  const [attrPlan] = await sql`
-    INSERT INTO attribute_definition (customer_id, name, data_type)
-    VALUES (${customer.id}, 'plan', 'text')
-    RETURNING id
-  `;
-  const [attrHasInsurance] = await sql`
-    INSERT INTO attribute_definition (customer_id, name, data_type)
-    VALUES (${customer.id}, 'has_insurance', 'boolean')
-    RETURNING id
-  `;
-  const [attrLoyaltyPoints] = await sql`
-    INSERT INTO attribute_definition (customer_id, name, data_type)
-    VALUES (${customer.id}, 'loyalty_points', 'number')
-    RETURNING id
-  `;
-  console.log('Created attribute definitions:', attrPlan.id, attrHasInsurance.id, attrLoyaltyPoints.id);
+  // const [attrPlan] = await sql`
+  //   INSERT INTO attribute_definition (customer_id, name, data_type)
+  //   VALUES (${customer.id}, 'plan', 'text')
+  //   RETURNING id
+  // `;
+  // const [attrHasInsurance] = await sql`
+  //   INSERT INTO attribute_definition (customer_id, name, data_type)
+  //   VALUES (${customer.id}, 'has_insurance', 'boolean')
+  //   RETURNING id
+  // `;
+  // const [attrLoyaltyPoints] = await sql`
+  //   INSERT INTO attribute_definition (customer_id, name, data_type)
+  //   VALUES (${customer.id}, 'loyalty_points', 'number')
+  //   RETURNING id
+  // `;
+
+  // console.log('Created attribute definitions:', attrPlan.id, attrHasInsurance.id, attrLoyaltyPoints.id);
 
   // Create user attributes
-  await sql`
-    INSERT INTO user_attribute (user_id, attribute_definition_id, value_text)
-    VALUES (${user.id}, ${attrPlan.id}, 'free')
-  `;
-  await sql`
-    INSERT INTO user_attribute (user_id, attribute_definition_id, value_boolean)
-    VALUES (${user.id}, ${attrHasInsurance.id}, false)
-  `;
-  await sql`
-    INSERT INTO user_attribute (user_id, attribute_definition_id, value_number)
-    VALUES (${user.id}, ${attrLoyaltyPoints.id}, 150)
-  `;
-  console.log('Created user attributes');
+  // await sql`
+  //   INSERT INTO user_attribute (user_id, attribute_definition_id, text_value)
+  //   VALUES (${user.id}, ${attrPlan.id}, 'free')
+  // `;
+  // await sql`
+  //   INSERT INTO user_attribute (user_id, attribute_definition_id, boolean_value)
+  //   VALUES (${user.id}, ${attrHasInsurance.id}, false)
+  // `;
+  // await sql`
+  //   INSERT INTO user_attribute (user_id, attribute_definition_id, number_value)
+  //   VALUES (${user.id}, ${attrLoyaltyPoints.id}, 150)
+  // `;
+
+  // console.log('Created user attributes');
 
   // // Create a workflow: "Upgrade Prompt"
   // // Trigger: contact_added -> Wait 24h -> Branch (plan != pro) -> Send notification

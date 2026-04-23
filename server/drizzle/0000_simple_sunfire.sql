@@ -24,6 +24,16 @@ CREATE TABLE "customer" (
 	CONSTRAINT "customer_api_key_unique" UNIQUE("api_key")
 );
 --> statement-breakpoint
+CREATE TABLE "event" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"customer_id" uuid NOT NULL,
+	"user_id" uuid NOT NULL,
+	"event_name" text NOT NULL,
+	"properties" jsonb,
+	"timestamp" timestamp with time zone NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now()
+);
+--> statement-breakpoint
 CREATE TABLE "step" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"workflow_id" uuid NOT NULL,
@@ -54,9 +64,9 @@ CREATE TABLE "user_attribute" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" uuid NOT NULL,
 	"attribute_definition_id" uuid NOT NULL,
-	"value_text" text,
-	"value_boolean" boolean,
-	"value_number" numeric,
+	"text_value" text,
+	"boolean_value" boolean,
+	"number_value" numeric,
 	"created_at" timestamp with time zone DEFAULT now(),
 	"updated_at" timestamp with time zone DEFAULT now(),
 	CONSTRAINT "user_attribute_user_id_attribute_definition_id_unique" UNIQUE("user_id","attribute_definition_id")
@@ -66,7 +76,7 @@ CREATE TABLE "workflow" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"customer_id" uuid NOT NULL,
 	"name" text NOT NULL,
-	"trigger_event" "trigger_event" NOT NULL,
+	"trigger_event" text NOT NULL,
 	"status" "workflow_status" DEFAULT 'draft' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now()
 );
@@ -83,6 +93,8 @@ CREATE TABLE "workflow_enrollment" (
 );
 --> statement-breakpoint
 ALTER TABLE "attribute_definition" ADD CONSTRAINT "attribute_definition_customer_id_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customer"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "event" ADD CONSTRAINT "event_customer_id_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customer"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "event" ADD CONSTRAINT "event_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "step" ADD CONSTRAINT "step_workflow_id_workflow_id_fk" FOREIGN KEY ("workflow_id") REFERENCES "public"."workflow"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "step_edge" ADD CONSTRAINT "step_edge_workflow_id_workflow_id_fk" FOREIGN KEY ("workflow_id") REFERENCES "public"."workflow"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "step_edge" ADD CONSTRAINT "step_edge_source_step_id_fk" FOREIGN KEY ("source") REFERENCES "public"."step"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

@@ -13,14 +13,14 @@ export type CanvasEdge = {
 
 export type CreateWorkflowInput = {
   name: string;
-  trigger_event: "contact_added" | "contact_updated" | "event_received";
+  trigger_event: string;
   steps: CanvasStep[];
   edges: CanvasEdge[];
 };
 
 export type UpdateWorkflowInput = {
   name: string;
-  trigger_event: "contact_added" | "contact_updated" | "event_received";
+  trigger_event: string;
   steps: CanvasStep[];
   edges: CanvasEdge[];
 };

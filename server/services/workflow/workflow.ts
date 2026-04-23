@@ -34,15 +34,9 @@ export async function listWorkflows() {
   return repository.listWorkflows();
 }
 
-export async function createWorkflow(input: CreateWorkflowInput) {
-  const customer = await repository.findFirstCustomer();
-
-  if (!customer) {
-    throw new Error("No customer found in db");
-  }
-
+export async function createWorkflow(customerId: string, input: CreateWorkflowInput) {
   const workflow = await repository.createWorkflow({
-    customerId: customer.id,
+    customerId,
     name: input.name,
     triggerEvent: input.trigger_event,
     status: "active",
