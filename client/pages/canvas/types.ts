@@ -3,14 +3,15 @@ import type {
   WaitConfig,
   BranchConfig,
   SendConfig,
+  FilterConfig,
   StepConfig,
 } from '../../../server/db/schema';
 
 // Re-export config types for convenience
-export type { WaitConfig, BranchConfig, SendConfig, StepConfig };
+export type { WaitConfig, BranchConfig, SendConfig, FilterConfig, StepConfig };
 
 // Enums matching server/database schema
-export type StepType = 'wait' | 'branch' | 'send' | 'trigger';
+export type StepType = 'wait' | 'branch' | 'send' | 'filter' | 'trigger';
 export type TriggerEvent = string;
 export type BranchOperator = '=' | '!=' | 'exists' | 'not_exists';
 
@@ -44,7 +45,13 @@ export interface SendNodeData extends Record<string, unknown> {
   label: string;
 }
 
-export type StepNodeData = TriggerNodeData | WaitNodeData | BranchNodeData | SendNodeData;
+export interface FilterNodeData extends Record<string, unknown> {
+  type: 'filter';
+  config: FilterConfig;
+  label: string;
+}
+
+export type StepNodeData = TriggerNodeData | WaitNodeData | BranchNodeData | SendNodeData | FilterNodeData;
 
 // Custom node types for xyflow
 export type StepNode = Node<StepNodeData, StepType>;

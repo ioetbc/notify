@@ -15,6 +15,13 @@
       "when": 1776966484335,
       "tag": "0001_shiny_molecule_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1776969135069,
+      "tag": "0002_last_starjammers",
+      "breakpoints": true
     }
   ]
 }

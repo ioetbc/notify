@@ -32,7 +32,7 @@ export default $config({
         cors: {
           allowOrigins: ['*'],
           allowMethods: ['GET', 'POST', 'PUT', 'DELETE'],
-          allowHeaders: ['Content-Type'],
+          allowHeaders: ['Content-Type', 'X-Customer-Id'],
         },
       },
     });
@@ -45,7 +45,7 @@ export default $config({
         cors: {
           allowOrigins: ['*'],
           allowMethods: ['GET', 'POST', 'PATCH'],
-          allowHeaders: ['Content-Type', 'Authorization'],
+          allowHeaders: ['Content-Type', 'Authorization', 'X-Customer-Id'],
         },
       },
     });

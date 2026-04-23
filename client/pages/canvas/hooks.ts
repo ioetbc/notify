@@ -65,6 +65,7 @@ export function useSaveWorkflow(
           .with({ type: 'wait' }, (d): CanvasStep[] => [{ id: n.id, type: d.type, config: d.config }])
           .with({ type: 'branch' }, (d): CanvasStep[] => [{ id: n.id, type: d.type, config: d.config }])
           .with({ type: 'send' }, (d): CanvasStep[] => [{ id: n.id, type: d.type, config: d.config }])
+          .with({ type: 'filter' }, (d): CanvasStep[] => [{ id: n.id, type: d.type, config: d.config }])
           .with({ type: 'trigger' }, (): CanvasStep[] => [])
           .exhaustive()
       );

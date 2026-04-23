@@ -10,7 +10,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
-export const stepTypeEnum = pgEnum("step_type", ["wait", "branch", "send"]);
+export const stepTypeEnum = pgEnum("step_type", ["wait", "branch", "send", "filter"]);
 
 export const triggerEventEnum = pgEnum("trigger_event", [
   "contact_added",
@@ -80,7 +80,12 @@ export type BranchConfig = {
   compare_value?: string;
 };
 export type SendConfig = { title: string; body: string };
-export type StepConfig = WaitConfig | BranchConfig | SendConfig;
+export type FilterConfig = {
+  attribute_key: string;
+  operator: "=" | "!=" | ">" | "<";
+  compare_value: string | number | boolean;
+};
+export type StepConfig = WaitConfig | BranchConfig | SendConfig | FilterConfig;
 
 export const step = pgTable("step", {
   id: uuid("id").primaryKey().defaultRandom(),

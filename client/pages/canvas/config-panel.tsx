@@ -4,13 +4,14 @@ import type {
   WaitNodeData,
   BranchNodeData,
   SendNodeData,
+  FilterNodeData,
 } from './types';
 import type { CanvasNode, UserColumn } from './utils';
 import { formatTriggerEvent, TRIGGER_EVENTS } from './utils';
 
 interface ConfigPanelProps {
   node: CanvasNode;
-  onUpdate: (config: TriggerNodeData['config'] | WaitNodeData['config'] | BranchNodeData['config'] | SendNodeData['config']) => void;
+  onUpdate: (config: TriggerNodeData['config'] | WaitNodeData['config'] | BranchNodeData['config'] | SendNodeData['config'] | FilterNodeData['config']) => void;
   onClose: () => void;
   userColumns: UserColumn[];
 }
@@ -41,6 +42,9 @@ export function ConfigPanel({ node, onUpdate, onClose, userColumns }: ConfigPane
       )}
       {data.type === 'send' && (
         <SendConfig config={data.config} onUpdate={onUpdate} />
+      )}
+      {data.type === 'filter' && (
+        <FilterConfig config={data.config} onUpdate={onUpdate} userColumns={userColumns} />
       )}
     </div>
   );
@@ -195,6 +199,79 @@ function SendConfig({
           className="w-full border border-gray-300 rounded px-3 py-2"
         />
       </div>
+    </div>
+  );
+}
+
+function FilterConfig({
+  config,
+  onUpdate,
+  userColumns,
+}: {
+  config: FilterNodeData['config'];
+  onUpdate: (config: FilterNodeData['config']) => void;
+  userColumns: UserColumn[];
+}) {
+  const operators = ['=', '!=', '>', '<'] as const;
+  const selectedColumn = userColumns.find((col) => col.name === config.attribute_key);
+
+  function parseValue(raw: string): string | number | boolean {
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+    if (raw !== '' && !isNaN(Number(raw))) return Number(raw);
+    return raw;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="block text-sm text-gray-700 mb-1">Attribute</label>
+        <select
+          value={config.attribute_key}
+          onChange={(e) => onUpdate({ ...config, attribute_key: e.target.value, compare_value: '' })}
+          className="w-full border border-gray-300 rounded px-3 py-2"
+        >
+          <option value="">Select an attribute...</option>
+          {userColumns.map((col) => (
+            <option key={col.name} value={col.name}>
+              {col.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label className="block text-sm text-gray-700 mb-1">Operator</label>
+        <select
+          value={config.operator}
+          onChange={(e) =>
+            onUpdate({ ...config, operator: e.target.value as typeof config.operator })
+          }
+          className="w-full border border-gray-300 rounded px-3 py-2"
+        >
+          {operators.map((op) => (
+            <option key={op} value={op}>
+              {op}
+            </option>
+          ))}
+        </select>
+      </div>
+      {config.attribute_key && selectedColumn && (
+        <div>
+          <label className="block text-sm text-gray-700 mb-1">Value</label>
+          <select
+            value={String(config.compare_value ?? '')}
+            onChange={(e) => onUpdate({ ...config, compare_value: parseValue(e.target.value) })}
+            className="w-full border border-gray-300 rounded px-3 py-2"
+          >
+            <option value="">Select a value...</option>
+            {selectedColumn.values.map((val) => (
+              <option key={val} value={val}>
+                {val}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import type {
   WaitNodeData,
   BranchNodeData,
   SendNodeData,
+  FilterNodeData,
   StepConfig,
 } from './types';
 import { getLayoutedElements } from './layout';
@@ -17,6 +18,7 @@ export type CanvasNode = Node<StepNodeData, StepType>;
 
 export interface UserColumn {
   name: string;
+  values: string[];
 }
 
 export function formatTriggerEvent(event: string): string {
@@ -52,6 +54,12 @@ export function createNodeData(type: StepType): StepNodeData {
         config: { title: 'Notification', body: 'Your message here' },
         label: 'Send',
       } as SendNodeData;
+    case 'filter':
+      return {
+        type: 'filter',
+        config: { attribute_key: '', operator: '=', compare_value: '' },
+        label: 'Filter',
+      } as FilterNodeData;
   }
 }
 
@@ -61,7 +69,7 @@ export function getNodeId() {
 
 export interface ApiStep {
   id: string;
-  type: 'wait' | 'branch' | 'send';
+  type: 'wait' | 'branch' | 'send' | 'filter';
   config: StepConfig;
 }
 

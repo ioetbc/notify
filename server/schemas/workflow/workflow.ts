@@ -1,7 +1,7 @@
 import { z } from "zod";
 import * as schema from "../../db";
 
-const [waitType, branchType, sendType] = schema.stepTypeEnum.enumValues;
+const [waitType, branchType, sendType, filterType] = schema.stepTypeEnum.enumValues;
 
 const waitStepSchema = z.object({
   id: z.uuid(),
@@ -30,10 +30,21 @@ const sendStepSchema = z.object({
   }),
 });
 
+const filterStepSchema = z.object({
+  id: z.uuid(),
+  type: z.literal(filterType),
+  config: z.object({
+    attribute_key: z.string(),
+    operator: z.enum(["=", "!=", ">", "<"]),
+    compare_value: z.union([z.string(), z.number(), z.boolean()]),
+  }),
+});
+
 export const canvasStepSchema = z.discriminatedUnion("type", [
   waitStepSchema,
   branchStepSchema,
   sendStepSchema,
+  filterStepSchema,
 ]);
 
 export const canvasEdgeSchema = z.object({

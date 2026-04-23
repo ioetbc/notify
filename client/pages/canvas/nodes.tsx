@@ -1,6 +1,6 @@
 import { Handle, Position, type NodeProps, type Node } from '@xyflow/react';
-import { Clock, GitBranch, Bell, Zap } from 'lucide-react';
-import type { TriggerNodeData, WaitNodeData, BranchNodeData, SendNodeData } from './types';
+import { Clock, GitBranch, Bell, Zap, Filter } from 'lucide-react';
+import type { TriggerNodeData, WaitNodeData, BranchNodeData, SendNodeData, FilterNodeData } from './types';
 
 const baseNodeStyles = 'px-4 py-3 rounded-lg border-2 shadow-sm min-w-[150px]';
 
@@ -139,9 +139,41 @@ export function SendNode({ data, selected }: NodeProps<SendNode>) {
   );
 }
 
+type FilterNode = Node<FilterNodeData, 'filter'>;
+
+export function FilterNode({ data, selected }: NodeProps<FilterNode>) {
+  const { attribute_key, operator, compare_value } = data.config;
+
+  let conditionText = 'Configure filter...';
+  if (attribute_key) {
+    conditionText = `${attribute_key} ${operator} ${JSON.stringify(compare_value)}`;
+  }
+
+  return (
+    <div
+      className={`${baseNodeStyles} bg-orange-50 border-orange-300 ${
+        selected ? 'ring-2 ring-orange-500' : ''
+      }`}
+    >
+      <Handle type="target" position={Position.Top} className="!bg-orange-500" />
+      <div className="flex items-center gap-2">
+        <Filter className="w-4 h-4 text-orange-600" />
+        <div>
+          <div className="text-xs text-orange-600 font-medium">Filter</div>
+          <div className="text-sm font-semibold text-orange-800 max-w-[180px] truncate">
+            {conditionText}
+          </div>
+        </div>
+      </div>
+      <Handle type="source" position={Position.Bottom} className="!bg-orange-500" />
+    </div>
+  );
+}
+
 export const nodeTypes = {
   trigger: TriggerNode,
   wait: WaitNode,
   branch: BranchNode,
   send: SendNode,
+  filter: FilterNode,
 };

@@ -1,4 +1,4 @@
-import { Clock, GitBranch, Bell, Zap } from 'lucide-react';
+import { Clock, GitBranch, Bell, Zap, Filter } from 'lucide-react';
 import type { StepType } from './types';
 
 interface StepPaletteItemProps {
@@ -55,6 +55,12 @@ export function StepPalette() {
         label="Send"
         icon={<Bell className="w-4 h-4 text-blue-600" />}
         color="bg-blue-50 border-blue-200 text-blue-800"
+      />
+      <StepPaletteItem
+        type="filter"
+        label="Filter"
+        icon={<Filter className="w-4 h-4 text-orange-600" />}
+        color="bg-orange-50 border-orange-200 text-orange-800"
       />
     </div>
   );

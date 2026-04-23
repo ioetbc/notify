@@ -18,12 +18,18 @@ const routes = app
 
     const result = await db
       .select({
-        keys: sql<string[]>`array_agg(DISTINCT jsonb_object_keys(${user.attributes}))`,
+        key: sql<string>`k`,
+        values: sql<string[]>`array_agg(DISTINCT v::text)`,
       })
-      .from(user)
-      .where(eq(user.customerId, customerId));
+      .from(
+        sql`(SELECT k, ${user.attributes} -> k AS v FROM ${user}, jsonb_object_keys(${user.attributes}) AS k WHERE ${user.customerId} = ${customerId}) AS sub`
+      )
+      .groupBy(sql`k`);
 
-    const columns = (result[0]?.keys ?? []).map((name) => ({ name }));
+    const columns = result.map((row) => ({
+      name: row.key,
+      values: row.values ?? [],
+    }));
 
     return c.json({ columns }, 200);
   });
