@@ -2,13 +2,10 @@ import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
 import { db, attributeDefinition } from "../../db";
 import { workflows } from "./workflows";
-import { steps } from "./steps";
-
 const app = new Hono();
 
 const routes = app
   .route("/workflows", workflows)
-  .route("/steps", steps)
   .get("/user-columns", async (c) => {
     const attributes = await db
       .select({

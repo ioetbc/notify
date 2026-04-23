@@ -45,7 +45,6 @@ export const canvasEdgeSchema = z.object({
 export const createWorkflowSchema = z.object({
   name: z.string(),
   trigger_event: z.enum(schema.triggerEventEnum.enumValues),
-  customer_id: z.string(),
   steps: z.array(canvasStepSchema),
   edges: z.array(canvasEdgeSchema),
 });
