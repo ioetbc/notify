@@ -106,6 +106,7 @@ export function dbToCanvas(
   const stepsWithIncoming = new Set<string>();
 
   for (const e of apiEdges) {
+    const label = e.handle === 'yes' ? 'Yes' : e.handle === 'no' ? 'No' : undefined;
     edges.push({
       id: e.id,
       source: e.source,
@@ -113,6 +114,7 @@ export function dbToCanvas(
       sourceHandle: e.handle ?? undefined,
       animated: true,
       markerEnd: { type: MarkerType.ArrowClosed },
+      ...(label && { label }),
     });
     stepsWithIncoming.add(e.target);
   }

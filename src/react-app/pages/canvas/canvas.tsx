@@ -1,15 +1,15 @@
-import { useCallback, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useCallback, useState } from 'react';
 import {
   ReactFlow,
+  ReactFlowProvider,
   Background,
   Controls,
   addEdge,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   type Connection,
   type Edge,
-  type ReactFlowInstance,
   MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -28,15 +28,14 @@ import { createNodeData, getNodeId, type CanvasNode } from './utils';
 import { ConfigPanel } from './config-panel';
 import { useUserColumns, useWorkflow, useSaveWorkflow } from './hooks';
 
-export function Canvas() {
-  const { id: urlId } = useParams<{ id: string }>();
-  const workflowId = urlId === 'new' ? undefined : urlId;
-  const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<CanvasNode, Edge> | null>(null);
+function CanvasInner({ workflowId }: { workflowId?: string }) {
+  const { screenToFlowPosition } = useReactFlow();
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const [selectedNode, setSelectedNode] = useState<CanvasNode | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [workflowName, setWorkflowName] = useState('Untitled Workflow');
+
+  const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
 
   const { data: userColumns = [] } = useUserColumns();
 
@@ -48,12 +47,50 @@ export function Canvas() {
 
   const saveMutation = useSaveWorkflow(workflowId, workflowName, nodes, edges);
 
+  const isValidConnection = useCallback(
+    (connection: Connection | Edge) => {
+      if (connection.source === connection.target) return false;
+
+      const exists = edges.some(
+        (e) =>
+          e.source === connection.source &&
+          e.target === connection.target &&
+          e.sourceHandle === (connection.sourceHandle ?? null)
+      );
+
+      if (exists) return false;
+
+      const visited = new Set<string>();
+      const queue = [connection.target];
+
+      while (queue.length > 0) {
+        const current = queue.pop()!;
+        if (current === connection.source) return false;
+        if (visited.has(current)) continue;
+        visited.add(current);
+        for (const e of edges) {
+          if (e.source === current) queue.push(e.target);
+        }
+      }
+
+      return true;
+    },
+    [edges]
+  );
+
   const onConnect = useCallback(
     (connection: Connection) => {
+      const label = connection.sourceHandle === 'yes'
+        ? 'Yes'
+        : connection.sourceHandle === 'no'
+          ? 'No'
+          : undefined;
+
       const edge = {
         ...connection,
         animated: true,
         markerEnd: { type: MarkerType.ArrowClosed },
+        ...(label && { label }),
       };
       setEdges((eds) => addEdge(edge, eds));
     },
@@ -70,12 +107,11 @@ export function Canvas() {
       event.preventDefault();
 
       const type = event.dataTransfer.getData('application/steptype') as StepType;
-      if (!type || !reactFlowInstance || !reactFlowWrapper.current) return;
+      if (!type) return;
 
-      const bounds = reactFlowWrapper.current.getBoundingClientRect();
-      const position = reactFlowInstance.screenToFlowPosition({
-        x: event.clientX - bounds.left,
-        y: event.clientY - bounds.top,
+      const position = screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
       });
 
       const newNode: CanvasNode = {
@@ -87,18 +123,18 @@ export function Canvas() {
 
       setNodes((nds) => [...nds, newNode]);
     },
-    [reactFlowInstance, setNodes]
+    [screenToFlowPosition, setNodes]
   );
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: CanvasNode) => {
-      setSelectedNode(node);
+      setSelectedNodeId(node.id);
     },
     []
   );
 
   const onPaneClick = useCallback(() => {
-    setSelectedNode(null);
+    setSelectedNodeId(null);
   }, []);
 
   const updateNodeData = useCallback(
@@ -112,13 +148,6 @@ export function Canvas() {
           return node;
         })
       );
-      setSelectedNode((prev) => {
-        if (prev && prev.id === nodeId) {
-          const updatedData = { ...prev.data, config: newConfig } as StepNodeData;
-          return { ...prev, data: updatedData } as CanvasNode;
-        }
-        return prev;
-      });
     },
     [setNodes]
   );
@@ -148,14 +177,14 @@ export function Canvas() {
 
         {/* Canvas */}
         <div className="flex-1 flex">
-          <div ref={reactFlowWrapper} className="flex-1">
+          <div className="flex-1">
             <ReactFlow
               nodes={nodes}
               edges={edges}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
-              onInit={setReactFlowInstance}
+              isValidConnection={isValidConnection}
               onDrop={onDrop}
               onDragOver={onDragOver}
               onNodeClick={onNodeClick}
@@ -174,12 +203,20 @@ export function Canvas() {
             <ConfigPanel
               node={selectedNode}
               onUpdate={(config) => updateNodeData(selectedNode.id, config)}
-              onClose={() => setSelectedNode(null)}
+              onClose={() => setSelectedNodeId(null)}
               userColumns={userColumns}
             />
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+export function Canvas({ workflowId }: { workflowId?: string }) {
+  return (
+    <ReactFlowProvider>
+      <CanvasInner workflowId={workflowId} />
+    </ReactFlowProvider>
   );
 }

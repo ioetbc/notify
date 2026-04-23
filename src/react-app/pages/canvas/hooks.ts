@@ -39,6 +39,9 @@ export function useWorkflow(
       return data;
     },
     enabled: !!workflowId,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 }
 
@@ -88,6 +91,7 @@ export function useSaveWorkflow(
             edges: canvasEdges,
           },
         });
+        if (!res.ok) throw new Error(`Save failed (${res.status}): ${await res.text()}`);
         return res.json();
       } else {
         const res = await client.workflows.$post({
@@ -98,12 +102,13 @@ export function useSaveWorkflow(
             edges: canvasEdges,
           },
         });
+        if (!res.ok) throw new Error(`Save failed (${res.status}): ${await res.text()}`);
         return res.json();
       }
     },
     onSuccess: (data) => {
       if (!workflowId && 'workflow' in data && data.workflow?.id) {
-        navigate(`/canvas/${data.workflow.id}`, { replace: true });
+        navigate(`/workflow/${data.workflow.id}`, { replace: true });
       }
       queryClient.invalidateQueries({ queryKey: ['workflow'] });
     },
