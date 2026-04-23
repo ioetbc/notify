@@ -5,15 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1776789080833,
-      "tag": "0000_serious_inhumans",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1776941728877,
-      "tag": "0001_magical_nightcrawler",
+      "when": 1776953816420,
+      "tag": "0000_next_gravity",
       "breakpoints": true
     }
   ]

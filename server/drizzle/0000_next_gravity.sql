@@ -1,9 +1,9 @@
 CREATE TYPE "public"."attribute_type" AS ENUM('text', 'boolean', 'number');--> statement-breakpoint
-CREATE TYPE "public"."branch_operator" AS ENUM('=', '!=', 'exists', 'not_exists');--> statement-breakpoint
 CREATE TYPE "public"."enrollment_status" AS ENUM('active', 'completed', 'exited');--> statement-breakpoint
 CREATE TYPE "public"."gender" AS ENUM('male', 'female', 'other');--> statement-breakpoint
 CREATE TYPE "public"."step_type" AS ENUM('wait', 'branch', 'send');--> statement-breakpoint
 CREATE TYPE "public"."trigger_event" AS ENUM('contact_added', 'contact_updated', 'event_received');--> statement-breakpoint
+CREATE TYPE "public"."workflow_status" AS ENUM('draft', 'active', 'paused', 'archived');--> statement-breakpoint
 CREATE TABLE "attribute_definition" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"customer_id" uuid NOT NULL,
@@ -27,31 +27,17 @@ CREATE TABLE "customer" (
 CREATE TABLE "step" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"workflow_id" uuid NOT NULL,
-	"step_type" "step_type" NOT NULL,
+	"type" "step_type" NOT NULL,
+	"config" jsonb NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now()
 );
 --> statement-breakpoint
-CREATE TABLE "step_branch" (
-	"step_id" uuid PRIMARY KEY NOT NULL,
-	"user_column" text,
-	"operator" "branch_operator" NOT NULL,
-	"compare_value" text,
-	"true_step_id" uuid,
-	"false_step_id" uuid,
-	"attribute_definition_id" uuid
-);
---> statement-breakpoint
-CREATE TABLE "step_send" (
-	"step_id" uuid PRIMARY KEY NOT NULL,
-	"title" text NOT NULL,
-	"body" text NOT NULL,
-	"next_step_id" uuid
-);
---> statement-breakpoint
-CREATE TABLE "step_wait" (
-	"step_id" uuid PRIMARY KEY NOT NULL,
-	"hours" integer NOT NULL,
-	"next_step_id" uuid
+CREATE TABLE "step_edge" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"workflow_id" uuid NOT NULL,
+	"source" uuid NOT NULL,
+	"target" uuid NOT NULL,
+	"handle" text
 );
 --> statement-breakpoint
 CREATE TABLE "user" (
@@ -81,7 +67,7 @@ CREATE TABLE "workflow" (
 	"customer_id" uuid NOT NULL,
 	"name" text NOT NULL,
 	"trigger_event" "trigger_event" NOT NULL,
-	"active" boolean DEFAULT false,
+	"status" "workflow_status" DEFAULT 'draft' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now()
 );
 --> statement-breakpoint
@@ -98,14 +84,9 @@ CREATE TABLE "workflow_enrollment" (
 --> statement-breakpoint
 ALTER TABLE "attribute_definition" ADD CONSTRAINT "attribute_definition_customer_id_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customer"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "step" ADD CONSTRAINT "step_workflow_id_workflow_id_fk" FOREIGN KEY ("workflow_id") REFERENCES "public"."workflow"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "step_branch" ADD CONSTRAINT "step_branch_step_id_step_id_fk" FOREIGN KEY ("step_id") REFERENCES "public"."step"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "step_branch" ADD CONSTRAINT "step_branch_true_step_id_step_id_fk" FOREIGN KEY ("true_step_id") REFERENCES "public"."step"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "step_branch" ADD CONSTRAINT "step_branch_false_step_id_step_id_fk" FOREIGN KEY ("false_step_id") REFERENCES "public"."step"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "step_branch" ADD CONSTRAINT "step_branch_attribute_definition_id_attribute_definition_id_fk" FOREIGN KEY ("attribute_definition_id") REFERENCES "public"."attribute_definition"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "step_send" ADD CONSTRAINT "step_send_step_id_step_id_fk" FOREIGN KEY ("step_id") REFERENCES "public"."step"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "step_send" ADD CONSTRAINT "step_send_next_step_id_step_id_fk" FOREIGN KEY ("next_step_id") REFERENCES "public"."step"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "step_wait" ADD CONSTRAINT "step_wait_step_id_step_id_fk" FOREIGN KEY ("step_id") REFERENCES "public"."step"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "step_wait" ADD CONSTRAINT "step_wait_next_step_id_step_id_fk" FOREIGN KEY ("next_step_id") REFERENCES "public"."step"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "step_edge" ADD CONSTRAINT "step_edge_workflow_id_workflow_id_fk" FOREIGN KEY ("workflow_id") REFERENCES "public"."workflow"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "step_edge" ADD CONSTRAINT "step_edge_source_step_id_fk" FOREIGN KEY ("source") REFERENCES "public"."step"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "step_edge" ADD CONSTRAINT "step_edge_target_step_id_fk" FOREIGN KEY ("target") REFERENCES "public"."step"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user" ADD CONSTRAINT "user_customer_id_customer_id_fk" FOREIGN KEY ("customer_id") REFERENCES "public"."customer"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_attribute" ADD CONSTRAINT "user_attribute_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "user_attribute" ADD CONSTRAINT "user_attribute_attribute_definition_id_attribute_definition_id_fk" FOREIGN KEY ("attribute_definition_id") REFERENCES "public"."attribute_definition"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

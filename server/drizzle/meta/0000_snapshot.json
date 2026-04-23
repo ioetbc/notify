@@ -1,5 +1,5 @@
 {
-  "id": "5abd6721-e6fe-415f-a642-78f7724f5fbe",
+  "id": "510305af-3b38-4243-8895-30c1dea0dd4f",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -157,10 +157,16 @@
           "primaryKey": false,
           "notNull": true
         },
-        "step_type": {
-          "name": "step_type",
+        "type": {
+          "name": "type",
           "type": "step_type",
           "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "config": {
+          "name": "config",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": true
         },
@@ -194,62 +200,50 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.step_branch": {
-      "name": "step_branch",
+    "public.step_edge": {
+      "name": "step_edge",
       "schema": "",
       "columns": {
-        "step_id": {
-          "name": "step_id",
+        "id": {
+          "name": "id",
           "type": "uuid",
           "primaryKey": true,
-          "notNull": true
+          "notNull": true,
+          "default": "gen_random_uuid()"
         },
-        "user_column": {
-          "name": "user_column",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "operator": {
-          "name": "operator",
-          "type": "branch_operator",
-          "typeSchema": "public",
+        "workflow_id": {
+          "name": "workflow_id",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": true
         },
-        "compare_value": {
-          "name": "compare_value",
+        "source": {
+          "name": "source",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target": {
+          "name": "target",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "handle": {
+          "name": "handle",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "true_step_id": {
-          "name": "true_step_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "false_step_id": {
-          "name": "false_step_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "attribute_definition_id": {
-          "name": "attribute_definition_id",
-          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         }
       },
       "indexes": {},
       "foreignKeys": {
-        "step_branch_step_id_step_id_fk": {
-          "name": "step_branch_step_id_step_id_fk",
-          "tableFrom": "step_branch",
-          "tableTo": "step",
+        "step_edge_workflow_id_workflow_id_fk": {
+          "name": "step_edge_workflow_id_workflow_id_fk",
+          "tableFrom": "step_edge",
+          "tableTo": "workflow",
           "columnsFrom": [
-            "step_id"
+            "workflow_id"
           ],
           "columnsTo": [
             "id"
@@ -257,89 +251,12 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "step_branch_true_step_id_step_id_fk": {
-          "name": "step_branch_true_step_id_step_id_fk",
-          "tableFrom": "step_branch",
+        "step_edge_source_step_id_fk": {
+          "name": "step_edge_source_step_id_fk",
+          "tableFrom": "step_edge",
           "tableTo": "step",
           "columnsFrom": [
-            "true_step_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "step_branch_false_step_id_step_id_fk": {
-          "name": "step_branch_false_step_id_step_id_fk",
-          "tableFrom": "step_branch",
-          "tableTo": "step",
-          "columnsFrom": [
-            "false_step_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "step_branch_attribute_definition_id_attribute_definition_id_fk": {
-          "name": "step_branch_attribute_definition_id_attribute_definition_id_fk",
-          "tableFrom": "step_branch",
-          "tableTo": "attribute_definition",
-          "columnsFrom": [
-            "attribute_definition_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.step_send": {
-      "name": "step_send",
-      "schema": "",
-      "columns": {
-        "step_id": {
-          "name": "step_id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "title": {
-          "name": "title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "body": {
-          "name": "body",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "next_step_id": {
-          "name": "next_step_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "step_send_step_id_step_id_fk": {
-          "name": "step_send_step_id_step_id_fk",
-          "tableFrom": "step_send",
-          "tableTo": "step",
-          "columnsFrom": [
-            "step_id"
+            "source"
           ],
           "columnsTo": [
             "id"
@@ -347,75 +264,17 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "step_send_next_step_id_step_id_fk": {
-          "name": "step_send_next_step_id_step_id_fk",
-          "tableFrom": "step_send",
+        "step_edge_target_step_id_fk": {
+          "name": "step_edge_target_step_id_fk",
+          "tableFrom": "step_edge",
           "tableTo": "step",
           "columnsFrom": [
-            "next_step_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.step_wait": {
-      "name": "step_wait",
-      "schema": "",
-      "columns": {
-        "step_id": {
-          "name": "step_id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "hours": {
-          "name": "hours",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "next_step_id": {
-          "name": "next_step_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "step_wait_step_id_step_id_fk": {
-          "name": "step_wait_step_id_step_id_fk",
-          "tableFrom": "step_wait",
-          "tableTo": "step",
-          "columnsFrom": [
-            "step_id"
+            "target"
           ],
           "columnsTo": [
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "step_wait_next_step_id_step_id_fk": {
-          "name": "step_wait_next_step_id_step_id_fk",
-          "tableFrom": "step_wait",
-          "tableTo": "step",
-          "columnsFrom": [
-            "next_step_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -630,12 +489,13 @@
           "primaryKey": false,
           "notNull": true
         },
-        "active": {
-          "name": "active",
-          "type": "boolean",
+        "status": {
+          "name": "status",
+          "type": "workflow_status",
+          "typeSchema": "public",
           "primaryKey": false,
-          "notNull": false,
-          "default": false
+          "notNull": true,
+          "default": "'draft'"
         },
         "created_at": {
           "name": "created_at",
@@ -786,16 +646,6 @@
         "number"
       ]
     },
-    "public.branch_operator": {
-      "name": "branch_operator",
-      "schema": "public",
-      "values": [
-        "=",
-        "!=",
-        "exists",
-        "not_exists"
-      ]
-    },
     "public.enrollment_status": {
       "name": "enrollment_status",
       "schema": "public",
@@ -830,6 +680,16 @@
         "contact_added",
         "contact_updated",
         "event_received"
+      ]
+    },
+    "public.workflow_status": {
+      "name": "workflow_status",
+      "schema": "public",
+      "values": [
+        "draft",
+        "active",
+        "paused",
+        "archived"
       ]
     }
   },

@@ -1,25 +1,13 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { match } from "ts-pattern";
 import { eq, desc } from "drizzle-orm";
 import { z } from "zod";
-import {
-  db,
-  customer,
-  workflow,
-  step,
-  stepWait,
-  stepBranch,
-  stepSend,
-  triggerEventEnum,
-  stepTypeEnum,
-  branchOperatorEnum,
-} from "../../db";
+import * as schema from "../../db";
 
-const [waitType, branchType, sendType] = stepTypeEnum.enumValues;
+const [waitType, branchType, sendType] = schema.stepTypeEnum.enumValues;
 
 const waitStepSchema = z.object({
-  id: z.string(),
+  id: z.string().uuid(),
   type: z.literal(waitType),
   config: z.object({
     hours: z.number(),
@@ -27,17 +15,17 @@ const waitStepSchema = z.object({
 });
 
 const branchStepSchema = z.object({
-  id: z.string(),
+  id: z.string().uuid(),
   type: z.literal(branchType),
   config: z.object({
     user_column: z.string(),
-    operator: z.enum(branchOperatorEnum.enumValues),
+    operator: z.enum(["=", "!=", "exists", "not_exists"]),
     compare_value: z.string().nullable(),
   }),
 });
 
 const sendStepSchema = z.object({
-  id: z.string(),
+  id: z.string().uuid(),
   type: z.literal(sendType),
   config: z.object({
     title: z.string(),
@@ -54,12 +42,12 @@ const canvasStepSchema = z.discriminatedUnion("type", [
 const canvasEdgeSchema = z.object({
   source: z.string(),
   target: z.string(),
-  sourceHandle: z.string().optional(),
+  handle: z.string().optional(),
 });
 
 const createWorkflowSchema = z.object({
   name: z.string(),
-  trigger_event: z.enum(triggerEventEnum.enumValues),
+  trigger_event: z.enum(schema.triggerEventEnum.enumValues),
   customer_id: z.string().optional(),
   steps: z.array(canvasStepSchema),
   edges: z.array(canvasEdgeSchema),
@@ -67,7 +55,7 @@ const createWorkflowSchema = z.object({
 
 const updateWorkflowSchema = z.object({
   name: z.string(),
-  trigger_event: z.enum(triggerEventEnum.enumValues),
+  trigger_event: z.enum(schema.triggerEventEnum.enumValues),
   steps: z.array(canvasStepSchema),
   edges: z.array(canvasEdgeSchema),
 });
@@ -75,122 +63,56 @@ const updateWorkflowSchema = z.object({
 type CanvasStep = z.infer<typeof canvasStepSchema>;
 type CanvasEdge = z.infer<typeof canvasEdgeSchema>;
 
-async function insertSteps(workflowId: string, canvasSteps: CanvasStep[]) {
-  const idMap = new Map<string, string>();
+async function insertSteps(workflowId: string, steps: CanvasStep[]) {
+  if (!steps.length) return;
 
-  for (const canvasStep of canvasSteps) {
-    const [dbStep] = await db
-      .insert(step)
-      .values({ workflowId, stepType: canvasStep.type })
-      .returning();
-    idMap.set(canvasStep.id, dbStep.id);
+  const payload = steps.map((step) => ({ id: step.id, workflowId, type: step.type, config: step.config }))
 
-    await match(canvasStep)
-      .with({ type: "wait" }, (s) =>
-        db.insert(stepWait).values({
-          stepId: dbStep.id,
-          hours: s.config.hours,
-        })
-      )
-      .with({ type: "branch" }, (s) =>
-        db.insert(stepBranch).values({
-          stepId: dbStep.id,
-          userColumn: s.config.user_column,
-          operator: s.config.operator,
-          compareValue: s.config.compare_value,
-        })
-      )
-      .with({ type: "send" }, (s) =>
-        db.insert(stepSend).values({
-          stepId: dbStep.id,
-          title: s.config.title,
-          body: s.config.body,
-        })
-      )
-      .exhaustive();
-  }
-
-  return idMap;
+  await schema.db.insert(schema.step).values(payload);
 }
 
-async function linkEdges(
-  idMap: Map<string, string>,
-  canvasSteps: CanvasStep[],
-  edges: CanvasEdge[]
-) {
-  for (const edge of edges) {
-    const sourceDbId = idMap.get(edge.source);
-    const targetDbId = idMap.get(edge.target);
-    if (!sourceDbId || !targetDbId) continue;
+async function insertEdges(workflowId: string, edges: CanvasEdge[]) {
+  if (!edges.length) return;
 
-    const sourceStep = canvasSteps.find((s) => s.id === edge.source);
-    if (!sourceStep) continue;
+  const payload = edges.map((e) => ({
+    workflowId,
+    source: e.source,
+    target: e.target,
+    handle: e.handle ?? null,
+  }))
 
-    await match(sourceStep)
-      .with({ type: "wait" }, () =>
-        db
-          .update(stepWait)
-          .set({ nextStepId: targetDbId })
-          .where(eq(stepWait.stepId, sourceDbId))
-      )
-      .with({ type: "send" }, () =>
-        db
-          .update(stepSend)
-          .set({ nextStepId: targetDbId })
-          .where(eq(stepSend.stepId, sourceDbId))
-      )
-      .with({ type: "branch" }, () => {
-        const field =
-          edge.sourceHandle === "yes" ? "trueStepId" : "falseStepId";
-        return db
-          .update(stepBranch)
-          .set({ [field]: targetDbId })
-          .where(eq(stepBranch.stepId, sourceDbId));
-      })
-      .exhaustive();
-  }
+  await schema.db.insert(schema.stepEdge).values(payload);
 }
 
 const workflows = new Hono()
   .get("/:id", async (c) => {
     const workflowId = c.req.param("id");
 
-    const workflowResult = await db.query.workflow.findFirst({
-      where: eq(workflow.id, workflowId),
+    const workflowResult = await schema.db.query.workflow.findFirst({
+      where: eq(schema.workflow.id, workflowId),
     });
 
     if (!workflowResult) {
       return c.json({ error: "Workflow not found" }, 404);
     }
 
-    const steps = await db
-      .select({
-        id: step.id,
-        stepType: step.stepType,
-        waitHours: stepWait.hours,
-        waitNextStepId: stepWait.nextStepId,
-        branchUserColumn: stepBranch.userColumn,
-        branchOperator: stepBranch.operator,
-        branchCompareValue: stepBranch.compareValue,
-        branchTrueStepId: stepBranch.trueStepId,
-        branchFalseStepId: stepBranch.falseStepId,
-        sendTitle: stepSend.title,
-        sendBody: stepSend.body,
-        sendNextStepId: stepSend.nextStepId,
-      })
-      .from(step)
-      .leftJoin(stepWait, eq(stepWait.stepId, step.id))
-      .leftJoin(stepBranch, eq(stepBranch.stepId, step.id))
-      .leftJoin(stepSend, eq(stepSend.stepId, step.id))
-      .where(eq(step.workflowId, workflowId));
+    const steps = await schema.db
+      .select()
+      .from(schema.step)
+      .where(eq(schema.step.workflowId, workflowId));
 
-    return c.json({ workflow: workflowResult, steps }, 200);
+    const edges = await schema.db
+      .select()
+      .from(schema.stepEdge)
+      .where(eq(schema.stepEdge.workflowId, workflowId));
+
+    return c.json({ workflow: workflowResult, steps, edges }, 200);
   })
   .get("/", async (c) => {
-    const allWorkflows = await db
+    const allWorkflows = await schema.db
       .select()
-      .from(workflow)
-      .orderBy(desc(workflow.createdAt))
+      .from(schema.workflow)
+      .orderBy(desc(schema.workflow.createdAt))
       .limit(10);
     return c.json({ workflows: allWorkflows }, 200);
   })
@@ -199,35 +121,29 @@ const workflows = new Hono()
     zValidator("json", createWorkflowSchema),
     async (c) => {
       const body = c.req.valid("json");
+      
+      const customer = await schema.db.query.customer.findFirst();
 
-      let customerId = body.customer_id;
-      if (!customerId) {
-        const existingCustomer = await db.query.customer.findFirst();
-        if (existingCustomer) {
-          customerId = existingCustomer.id;
-        } else {
-          const [newCustomer] = await db
-            .insert(customer)
-            .values({ email: "dev@example.com", name: "Dev Customer" })
-            .returning();
-          customerId = newCustomer.id;
-        }
+      if (!customer) {
+        throw new Error("No customer found in db")
       }
 
-      const [newWorkflow] = await db
-        .insert(workflow)
+      console.log('workflow body', JSON.stringify(body, null, 4))
+
+      const [workflow] = await schema.db
+        .insert(schema.workflow)
         .values({
-          customerId,
+          customerId: customer.id,
           name: body.name,
           triggerEvent: body.trigger_event,
           status: "active",
         })
         .returning();
 
-      const idMap = await insertSteps(newWorkflow.id, body.steps);
-      await linkEdges(idMap, body.steps, body.edges);
+      await insertSteps(workflow.id, body.steps);
+      await insertEdges(workflow.id, body.edges);
 
-      return c.json({ workflow: newWorkflow, idMap: Object.fromEntries(idMap) }, 200);
+      return c.json({ workflow }, 200);
     }
   )
   .put(
@@ -237,25 +153,22 @@ const workflows = new Hono()
       const body = c.req.valid("json");
       const workflowId = c.req.param("id");
 
-      const [updatedWorkflow] = await db
-        .update(workflow)
+      const [updatedWorkflow] = await schema.db
+        .update(schema.workflow)
         .set({ name: body.name, triggerEvent: body.trigger_event })
-        .where(eq(workflow.id, workflowId))
+        .where(eq(schema.workflow.id, workflowId))
         .returning();
 
       if (!updatedWorkflow) {
         return c.json({ error: "Workflow not found" }, 404);
       }
 
-      await db.delete(step).where(eq(step.workflowId, workflowId));
+      await schema.db.delete(schema.step).where(eq(schema.step.workflowId, workflowId));
 
-      const idMap = await insertSteps(workflowId, body.steps);
-      await linkEdges(idMap, body.steps, body.edges);
+      await insertSteps(workflowId, body.steps);
+      await insertEdges(workflowId, body.edges);
 
-      return c.json({
-        workflow: updatedWorkflow,
-        idMap: Object.fromEntries(idMap),
-      }, 200);
+      return c.json({ workflow: updatedWorkflow }, 200);
     }
   );
 

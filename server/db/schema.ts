@@ -9,6 +9,7 @@ import {
   pgEnum,
   unique,
   numeric,
+  jsonb,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -24,13 +25,6 @@ export const enrollmentStatusEnum = pgEnum("enrollment_status", [
   "active",
   "completed",
   "exited",
-]);
-
-export const branchOperatorEnum = pgEnum("branch_operator", [
-  "=",
-  "!=",
-  "exists",
-  "not_exists",
 ]);
 
 export const genderEnum = pgEnum("gender", ["male", "female", "other"]);
@@ -88,48 +82,23 @@ export const step = pgTable("step", {
   workflowId: uuid("workflow_id")
     .notNull()
     .references(() => workflow.id, { onDelete: "cascade" }),
-  stepType: stepTypeEnum("step_type").notNull(),
+  type: stepTypeEnum("type").notNull(),
+  config: jsonb("config").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
-export const stepWait = pgTable("step_wait", {
-  stepId: uuid("step_id")
-    .primaryKey()
+export const stepEdge = pgTable("step_edge", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workflowId: uuid("workflow_id")
+    .notNull()
+    .references(() => workflow.id, { onDelete: "cascade" }),
+  source: uuid("source")
+    .notNull()
     .references(() => step.id, { onDelete: "cascade" }),
-  hours: integer("hours").notNull(),
-  nextStepId: uuid("next_step_id").references(() => step.id, {
-    onDelete: "set null",
-  }),
-});
-
-export const stepBranch = pgTable("step_branch", {
-  stepId: uuid("step_id")
-    .primaryKey()
+  target: uuid("target")
+    .notNull()
     .references(() => step.id, { onDelete: "cascade" }),
-  userColumn: text("user_column"),
-  operator: branchOperatorEnum("operator").notNull(),
-  compareValue: text("compare_value"),
-  trueStepId: uuid("true_step_id").references(() => step.id, {
-    onDelete: "set null",
-  }),
-  falseStepId: uuid("false_step_id").references(() => step.id, {
-    onDelete: "set null",
-  }),
-  attributeDefinitionId: uuid("attribute_definition_id").references(
-    () => attributeDefinition.id,
-    { onDelete: "cascade" }
-  ),
-});
-
-export const stepSend = pgTable("step_send", {
-  stepId: uuid("step_id")
-    .primaryKey()
-    .references(() => step.id, { onDelete: "cascade" }),
-  title: text("title").notNull(),
-  body: text("body").notNull(),
-  nextStepId: uuid("next_step_id").references(() => step.id, {
-    onDelete: "set null",
-  }),
+  handle: text("handle"),
 });
 
 export const workflowEnrollment = pgTable(
@@ -209,40 +178,30 @@ export const workflowRelations = relations(workflow, ({ one, many }) => ({
   enrollments: many(workflowEnrollment),
 }));
 
-export const stepRelations = relations(step, ({ one }) => ({
+export const stepRelations = relations(step, ({ one, many }) => ({
   workflow: one(workflow, {
     fields: [step.workflowId],
     references: [workflow.id],
   }),
-  waitConfig: one(stepWait, { fields: [step.id], references: [stepWait.stepId] }),
-  branchConfig: one(stepBranch, {
-    fields: [step.id],
-    references: [stepBranch.stepId],
+  outgoingEdges: many(stepEdge, { relationName: "sourceStep" }),
+  incomingEdges: many(stepEdge, { relationName: "targetStep" }),
+}));
+
+export const stepEdgeRelations = relations(stepEdge, ({ one }) => ({
+  workflow: one(workflow, {
+    fields: [stepEdge.workflowId],
+    references: [workflow.id],
   }),
-  sendConfig: one(stepSend, { fields: [step.id], references: [stepSend.stepId] }),
-}));
-
-export const stepWaitRelations = relations(stepWait, ({ one }) => ({
-  step: one(step, { fields: [stepWait.stepId], references: [step.id] }),
-  nextStep: one(step, { fields: [stepWait.nextStepId], references: [step.id] }),
-}));
-
-export const stepBranchRelations = relations(stepBranch, ({ one }) => ({
-  step: one(step, { fields: [stepBranch.stepId], references: [step.id] }),
-  trueStep: one(step, { fields: [stepBranch.trueStepId], references: [step.id] }),
-  falseStep: one(step, {
-    fields: [stepBranch.falseStepId],
+  sourceStep: one(step, {
+    fields: [stepEdge.source],
     references: [step.id],
+    relationName: "sourceStep",
   }),
-  attributeDefinition: one(attributeDefinition, {
-    fields: [stepBranch.attributeDefinitionId],
-    references: [attributeDefinition.id],
+  targetStep: one(step, {
+    fields: [stepEdge.target],
+    references: [step.id],
+    relationName: "targetStep",
   }),
-}));
-
-export const stepSendRelations = relations(stepSend, ({ one }) => ({
-  step: one(step, { fields: [stepSend.stepId], references: [step.id] }),
-  nextStep: one(step, { fields: [stepSend.nextStepId], references: [step.id] }),
 }));
 
 export const attributeDefinitionRelations = relations(
@@ -288,12 +247,8 @@ export type Workflow = typeof workflow.$inferSelect;
 export type NewWorkflow = typeof workflow.$inferInsert;
 export type Step = typeof step.$inferSelect;
 export type NewStep = typeof step.$inferInsert;
-export type StepWait = typeof stepWait.$inferSelect;
-export type NewStepWait = typeof stepWait.$inferInsert;
-export type StepBranch = typeof stepBranch.$inferSelect;
-export type NewStepBranch = typeof stepBranch.$inferInsert;
-export type StepSend = typeof stepSend.$inferSelect;
-export type NewStepSend = typeof stepSend.$inferInsert;
+export type StepEdge = typeof stepEdge.$inferSelect;
+export type NewStepEdge = typeof stepEdge.$inferInsert;
 export type AttributeDefinition = typeof attributeDefinition.$inferSelect;
 export type UserAttribute = typeof userAttribute.$inferSelect;
 export type WorkflowEnrollment = typeof workflowEnrollment.$inferSelect;
