@@ -519,20 +519,31 @@ const result = await db.transaction(async (tx) => {
 return c.json(result);
 ```
 
-### Route 5: GET `/enums` (line 181-203)
+### Route 5: GET `/enums` (line 181-203) - CAN BE REMOVED
+
+With Drizzle, enum values are available at build time via `.enumValues`:
 
 ```typescript
-// After - Use enum values from schema directly
-import { triggerEventEnum, stepTypeEnum, branchOperatorEnum } from '../../db';
+import { triggerEventEnum, stepTypeEnum, branchOperatorEnum } from './db/schema';
 
-app.get('/enums', (c) => {
-  return c.json({
-    trigger_event: triggerEventEnum.enumValues,
-    step_type: stepTypeEnum.enumValues,
-    branch_operator: branchOperatorEnum.enumValues,
-  });
-});
+triggerEventEnum.enumValues  // ['contact_added', 'contact_updated', 'event_received']
+stepTypeEnum.enumValues      // ['wait', 'branch', 'send']
+branchOperatorEnum.enumValues // ['=', '!=', 'exists', 'not_exists']
 ```
+
+**Option A: Delete the endpoint entirely** (recommended)
+- Export enums from a shared package the frontend can import
+- No network request needed, values are compile-time constants
+
+**Option B: Keep endpoint but make it static** (if frontend can't import schema)
+```typescript
+app.get('/enums', (c) => c.json({
+  trigger_event: triggerEventEnum.enumValues,
+  step_type: stepTypeEnum.enumValues,
+  branch_operator: branchOperatorEnum.enumValues,
+}));
+```
+This returns instantly without any database query.
 
 ### Route 6: PUT `/workflows/:id` (line 205-296)
 
@@ -687,11 +698,11 @@ DATABASE_URL="your-neon-url" bun db:migrate
   - [ ] GET `/workflows/:id`
   - [ ] GET `/workflows`
   - [ ] POST `/workflows`
-  - [ ] GET `/enums`
   - [ ] PUT `/workflows/:id`
   - [ ] DELETE `/workflows/:id`
   - [ ] GET `/user-columns`
   - [ ] PUT `/steps/:id`
+- [ ] Remove GET `/enums` endpoint (frontend imports enums from schema directly)
 - [ ] Test all endpoints
 - [ ] Remove old SQL migrations (optional, keep for reference)
 

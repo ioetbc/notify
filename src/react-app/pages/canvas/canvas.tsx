@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState, useEffect } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import {
   ReactFlow,
   Background,
@@ -16,6 +17,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
+import { client, queryClient } from '../../lib/api';
 import { nodeTypes } from './nodes';
 import { StepPalette } from './step-palette';
 import { getLayoutedElements } from './layout';
@@ -29,7 +31,7 @@ import type {
   SendNodeData,
 } from './types';
 
-const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+const TRIGGER_EVENTS: TriggerEvent[] = ['contact_added', 'contact_updated', 'event_received'];
 
 // Format trigger event for display (e.g., "contact_added" -> "Contact Added")
 function formatTriggerEvent(event: string): string {
@@ -42,7 +44,7 @@ function formatTriggerEvent(event: string): string {
 interface UserColumn {
   id: string;
   name: string;
-  data_type: 'text' | 'boolean' | 'number';
+  dataType: string;
 }
 
 type CanvasNode = Node<StepNodeData, StepType>;
@@ -84,21 +86,21 @@ function getNodeId() {
 // Convert DB workflow response to canvas nodes/edges
 interface DbStep {
   id: string;
-  step_type: 'wait' | 'branch' | 'send';
-  wait_hours?: number;
-  wait_next_step_id?: string;
-  branch_user_column?: string;
-  branch_operator?: string;
-  branch_compare_value?: string;
-  branch_true_step_id?: string;
-  branch_false_step_id?: string;
-  send_title?: string;
-  send_body?: string;
-  send_next_step_id?: string;
+  stepType: 'wait' | 'branch' | 'send';
+  waitHours: number | null;
+  waitNextStepId: string | null;
+  branchUserColumn: string | null;
+  branchOperator: string | null;
+  branchCompareValue: string | null;
+  branchTrueStepId: string | null;
+  branchFalseStepId: string | null;
+  sendTitle: string | null;
+  sendBody: string | null;
+  sendNextStepId: string | null;
 }
 
 function dbToCanvas(
-  workflow: { id: string; name: string; trigger_event: TriggerEvent },
+  workflow: { id: string; name: string; triggerEvent: TriggerEvent },
   steps: DbStep[]
 ): { nodes: CanvasNode[]; edges: Edge[] } {
   const nodes: CanvasNode[] = [];
@@ -111,7 +113,7 @@ function dbToCanvas(
     position: { x: 0, y: 0 },
     data: {
       type: 'trigger' as const,
-      config: { event: workflow.trigger_event },
+      config: { event: workflow.triggerEvent },
       label: 'Trigger',
     },
   };
@@ -119,18 +121,18 @@ function dbToCanvas(
 
   // Create step nodes
   for (const step of steps) {
-    if (step.step_type === 'wait') {
+    if (step.stepType === 'wait') {
       nodes.push({
         id: step.id,
         type: 'wait' as const,
         position: { x: 0, y: 0 },
         data: {
           type: 'wait' as const,
-          config: { hours: step.wait_hours || 24 },
+          config: { hours: step.waitHours || 24 },
           label: 'Wait',
         },
       });
-    } else if (step.step_type === 'branch') {
+    } else if (step.stepType === 'branch') {
       nodes.push({
         id: step.id,
         type: 'branch' as const,
@@ -138,9 +140,9 @@ function dbToCanvas(
         data: {
           type: 'branch' as const,
           config: {
-            user_column: step.branch_user_column || '',
-            operator: (step.branch_operator || '=') as BranchNodeData['config']['operator'],
-            compare_value: step.branch_compare_value || '',
+            user_column: step.branchUserColumn || '',
+            operator: (step.branchOperator || '=') as BranchNodeData['config']['operator'],
+            compare_value: step.branchCompareValue || '',
           },
           label: 'Branch',
         },
@@ -153,8 +155,8 @@ function dbToCanvas(
         data: {
           type: 'send' as const,
           config: {
-            title: step.send_title || 'Notification',
-            body: step.send_body || '',
+            title: step.sendTitle || 'Notification',
+            body: step.sendBody || '',
           },
           label: 'Send',
         },
@@ -166,46 +168,46 @@ function dbToCanvas(
   const stepsWithIncoming = new Set<string>();
 
   for (const step of steps) {
-    if (step.step_type === 'wait' && step.wait_next_step_id) {
+    if (step.stepType === 'wait' && step.waitNextStepId) {
       edges.push({
-        id: `${step.id}-${step.wait_next_step_id}`,
+        id: `${step.id}-${step.waitNextStepId}`,
         source: step.id,
-        target: step.wait_next_step_id,
+        target: step.waitNextStepId,
         animated: true,
         markerEnd: { type: MarkerType.ArrowClosed },
       });
-      stepsWithIncoming.add(step.wait_next_step_id);
-    } else if (step.step_type === 'send' && step.send_next_step_id) {
+      stepsWithIncoming.add(step.waitNextStepId);
+    } else if (step.stepType === 'send' && step.sendNextStepId) {
       edges.push({
-        id: `${step.id}-${step.send_next_step_id}`,
+        id: `${step.id}-${step.sendNextStepId}`,
         source: step.id,
-        target: step.send_next_step_id,
+        target: step.sendNextStepId,
         animated: true,
         markerEnd: { type: MarkerType.ArrowClosed },
       });
-      stepsWithIncoming.add(step.send_next_step_id);
-    } else if (step.step_type === 'branch') {
-      if (step.branch_true_step_id) {
+      stepsWithIncoming.add(step.sendNextStepId);
+    } else if (step.stepType === 'branch') {
+      if (step.branchTrueStepId) {
         edges.push({
-          id: `${step.id}-yes-${step.branch_true_step_id}`,
+          id: `${step.id}-yes-${step.branchTrueStepId}`,
           source: step.id,
-          target: step.branch_true_step_id,
+          target: step.branchTrueStepId,
           sourceHandle: 'yes',
           animated: true,
           markerEnd: { type: MarkerType.ArrowClosed },
         });
-        stepsWithIncoming.add(step.branch_true_step_id);
+        stepsWithIncoming.add(step.branchTrueStepId);
       }
-      if (step.branch_false_step_id) {
+      if (step.branchFalseStepId) {
         edges.push({
-          id: `${step.id}-no-${step.branch_false_step_id}`,
+          id: `${step.id}-no-${step.branchFalseStepId}`,
           source: step.id,
-          target: step.branch_false_step_id,
+          target: step.branchFalseStepId,
           sourceHandle: 'no',
           animated: true,
           markerEnd: { type: MarkerType.ArrowClosed },
         });
-        stepsWithIncoming.add(step.branch_false_step_id);
+        stepsWithIncoming.add(step.branchFalseStepId);
       }
     }
   }
@@ -239,133 +241,112 @@ export function Canvas() {
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNode, setSelectedNode] = useState<CanvasNode | null>(null);
-  const [userColumns, setUserColumns] = useState<UserColumn[]>([]);
-  const [triggerEvents, setTriggerEvents] = useState<TriggerEvent[]>([]);
   const [workflowName, setWorkflowName] = useState('Untitled Workflow');
-  const [isSaving, setIsSaving] = useState(false);
 
-  useEffect(() => {
-    async function fetchData() {
-      if (!API_URL) return;
-      try {
-        const [columnsRes, enumsRes] = await Promise.all([
-          fetch(`${API_URL}/user-columns`),
-          fetch(`${API_URL}/enums`),
-        ]);
-
-        const columnsData = await columnsRes.json();
-        setUserColumns(columnsData.columns || []);
-
-        const enumsData = await enumsRes.json();
-        setTriggerEvents(enumsData.trigger_event || []);
-      } catch (err) {
-        console.error('Failed to fetch data:', err);
-      }
-    }
-    fetchData();
-  }, []);
+  // Fetch user columns
+  const { data: userColumns = [] } = useQuery({
+    queryKey: ['user-columns'],
+    queryFn: async () => {
+      const res = await client['user-columns'].$get();
+      const data = await res.json();
+      return data.columns as UserColumn[];
+    },
+  });
 
   // Load existing workflow
-  useEffect(() => {
-    async function loadWorkflow() {
-      if (!workflowId || !API_URL) return;
-      try {
-        const res = await fetch(`${API_URL}/workflows/${workflowId}`);
-        if (!res.ok) {
-          console.error('Failed to load workflow');
-          return;
-        }
-        const data = await res.json();
-        setWorkflowName(data.workflow.name);
-        const { nodes: layoutedNodes, edges: layoutedEdges } = dbToCanvas(data.workflow, data.steps);
-        setNodes(layoutedNodes);
-        setEdges(layoutedEdges);
-      } catch (err) {
-        console.error('Failed to load workflow:', err);
-      }
-    }
-    loadWorkflow();
-  }, [workflowId, setNodes, setEdges]);
+  useQuery({
+    queryKey: ['workflow', workflowId],
+    queryFn: async () => {
+      const res = await client.workflows[':id'].$get({ param: { id: workflowId! } });
+      if (!res.ok) throw new Error('Failed to load workflow');
+      const data = await res.json();
+      if ('error' in data) throw new Error(String(data.error));
+      setWorkflowName(data.workflow.name);
+      const { nodes: layoutedNodes, edges: layoutedEdges } = dbToCanvas(
+        data.workflow as { id: string; name: string; triggerEvent: TriggerEvent },
+        data.steps as DbStep[]
+      );
+      setNodes(layoutedNodes);
+      setEdges(layoutedEdges);
+      return data;
+    },
+    enabled: !!workflowId,
+  });
 
-  const saveWorkflow = useCallback(async () => {
-    console.log('saveWorkflow called');
-    console.log('API_URL:', API_URL);
-    console.log('workflowId:', workflowId);
-    console.log('nodes:', nodes);
-    console.log('edges:', edges);
-
-    if (!API_URL) {
-      console.error('API_URL not configured');
-      alert('API URL not configured. Set VITE_API_URL in .env');
-      return;
-    }
-
-    setIsSaving(true);
-    try {
-      // Find trigger node to get trigger_event
+  // Save workflow mutation
+  const saveMutation = useMutation({
+    mutationFn: async () => {
       const triggerNode = nodes.find((n) => n.data.type === 'trigger');
-      const triggerEvent = triggerNode?.data.type === 'trigger'
+      const triggerEvent = (triggerNode?.data.type === 'trigger'
         ? triggerNode.data.config.event
-        : 'contact_added';
+        : 'contact_added') as TriggerEvent;
 
-      // Filter out trigger node for steps
-      const steps = nodes
-        .filter((n) => n.data.type !== 'trigger')
-        .map((n) => ({
-          id: n.id,
-          type: n.data.type as 'wait' | 'branch' | 'send',
-          config: n.data.config,
-        }));
+      const stepsPayload = nodes
+        .filter((n): n is CanvasNode & { data: WaitNodeData | BranchNodeData | SendNodeData } => n.data.type !== 'trigger')
+        .map((n) => {
+          const d = n.data;
+          if (d.type === 'wait') {
+            return { id: n.id, type: 'wait' as const, config: { hours: d.config.hours } };
+          } else if (d.type === 'branch') {
+            return {
+              id: n.id,
+              type: 'branch' as const,
+              config: {
+                user_column: d.config.user_column,
+                operator: d.config.operator,
+                compare_value: d.config.compare_value ?? null,
+              },
+            };
+          } else {
+            return {
+              id: n.id,
+              type: 'send' as const,
+              config: { title: d.config.title, body: d.config.body },
+            };
+          }
+        });
 
-      // Filter out edges from trigger (we'll reconstruct on load)
       const canvasEdges = edges
         .filter((e) => e.source !== 'trigger')
         .map((e) => ({
           source: e.source,
           target: e.target,
-          sourceHandle: e.sourceHandle,
+          sourceHandle: e.sourceHandle ?? undefined,
         }));
 
-      const payload = {
-        name: workflowName,
-        trigger_event: triggerEvent,
-        steps,
-        edges: canvasEdges,
-      };
-
-      console.log('Saving workflow:', payload);
-
-      const url = workflowId
-        ? `${API_URL}/workflows/${workflowId}`
-        : `${API_URL}/workflows`;
-
-      const res = await fetch(url, {
-        method: workflowId ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        console.error('Server error:', data);
-        alert(`Failed to save: ${data.error || res.statusText}`);
-        return;
+      if (workflowId) {
+        const res = await client.workflows[':id'].$put({
+          param: { id: workflowId },
+          json: {
+            name: workflowName,
+            trigger_event: triggerEvent,
+            steps: stepsPayload,
+            edges: canvasEdges,
+          },
+        });
+        return res.json();
+      } else {
+        const res = await client.workflows.$post({
+          json: {
+            name: workflowName,
+            trigger_event: triggerEvent,
+            steps: stepsPayload,
+            edges: canvasEdges,
+          },
+        });
+        return res.json();
       }
-
-      console.log('Saved successfully:', data);
-
-      // If creating new workflow, navigate to edit URL
-      if (!workflowId && data.workflow?.id) {
+    },
+    onSuccess: (data) => {
+      if (!workflowId && 'workflow' in data && data.workflow?.id) {
         navigate(`/canvas/${data.workflow.id}`, { replace: true });
       }
-    } catch (err) {
-      console.error('Failed to save workflow:', err);
+      queryClient.invalidateQueries({ queryKey: ['workflow'] });
+    },
+    onError: (err) => {
       alert(`Failed to save: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setIsSaving(false);
-    }
-  }, [nodes, edges, workflowName, workflowId, navigate]);
+    },
+  });
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -425,14 +406,12 @@ export function Canvas() {
       setNodes((nds) =>
         nds.map((node) => {
           if (node.id === nodeId) {
-            // Cast to any to avoid complex union type issues
             const updatedData = { ...node.data, config: newConfig } as StepNodeData;
             return { ...node, data: updatedData } as CanvasNode;
           }
           return node;
         })
       );
-      // Also update selected node if it matches
       setSelectedNode((prev) => {
         if (prev && prev.id === nodeId) {
           const updatedData = { ...prev.data, config: newConfig } as StepNodeData;
@@ -459,11 +438,11 @@ export function Canvas() {
             onChange={(e) => setWorkflowName(e.target.value)}
           />
           <button
-            onClick={saveWorkflow}
-            disabled={isSaving}
+            onClick={() => saveMutation.mutate()}
+            disabled={saveMutation.isPending}
             className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isSaving ? 'Saving...' : 'Save'}
+            {saveMutation.isPending ? 'Saving...' : 'Save'}
           </button>
         </div>
 
@@ -512,7 +491,7 @@ export function Canvas() {
               onUpdate={(config) => updateNodeData(selectedNode.id, config)}
               onClose={() => setSelectedNode(null)}
               userColumns={userColumns}
-              triggerEvents={triggerEvents}
+              triggerEvents={TRIGGER_EVENTS}
             />
           )}
         </div>
@@ -643,9 +622,8 @@ function BranchConfig({
   const operators = ['=', '!=', 'exists', 'not_exists'] as const;
   const needsValue = config.operator === '=' || config.operator === '!=';
 
-  // Find the selected attribute to get its data type
   const selectedAttribute = userColumns.find((col) => col.name === config.user_column);
-  const dataType = selectedAttribute?.data_type;
+  const dataType = selectedAttribute?.dataType;
 
   return (
     <div className="space-y-3">
@@ -659,7 +637,7 @@ function BranchConfig({
           <option value="">Select an attribute...</option>
           {userColumns.map((col) => (
             <option key={col.id} value={col.name}>
-              {col.name} ({col.data_type})
+              {col.name} ({col.dataType})
             </option>
           ))}
         </select>

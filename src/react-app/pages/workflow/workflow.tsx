@@ -1,35 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { client, queryClient } from '../../lib/api';
+import type { TriggerEvent } from '../canvas/types';
 
-const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+const TRIGGER_EVENTS: TriggerEvent[] = ['contact_added', 'contact_updated', 'event_received'];
+const BRANCH_OPERATORS = ['=', '!=', 'exists', 'not_exists'] as const;
 
 interface Step {
   id: string;
-  step_type: 'wait' | 'branch' | 'send';
-  step_order: number;
-  wait_hours?: number;
-  branch_user_column?: string;
-  branch_operator?: string;
-  branch_compare_value?: string;
-  send_title?: string;
-  send_body?: string;
-}
-
-interface Workflow {
-  id: string;
-  name: string;
-  trigger_event: string;
-  active: boolean;
-}
-
-interface WorkflowData {
-  workflow: Workflow;
-  steps: Step[];
-}
-
-interface Enums {
-  trigger_event: string[];
-  step_type: string[];
-  branch_operator: string[];
+  stepType: 'wait' | 'branch' | 'send';
+  waitHours: number | null;
+  branchUserColumn: string | null;
+  branchOperator: string | null;
+  branchCompareValue: string | null;
+  sendTitle: string | null;
+  sendBody: string | null;
 }
 
 interface EditingState {
@@ -39,15 +24,15 @@ interface EditingState {
 }
 
 function getStepLabel(step: Step): string {
-  switch (step.step_type) {
+  switch (step.stepType) {
     case 'wait':
-      return `Wait ${step.wait_hours}h`;
+      return `Wait ${step.waitHours}h`;
     case 'branch':
-      return `If ${step.branch_user_column} ${step.branch_operator} "${step.branch_compare_value}"`;
+      return `If ${step.branchUserColumn} ${step.branchOperator} "${step.branchCompareValue}"`;
     case 'send':
-      return `Send: "${step.send_title}"`;
+      return `Send: "${step.sendTitle}"`;
     default:
-      return step.step_type;
+      return step.stepType;
   }
 }
 
@@ -71,107 +56,83 @@ function PencilIcon() {
 }
 
 export function WorkflowPage() {
-  const [data, setData] = useState<WorkflowData | null>(null);
-  const [enums, setEnums] = useState<Enums | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditingState | null>(null);
-  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    async function fetchData() {
-      if (!API_URL) {
-        setError('API URL not configured');
-        setLoading(false);
-        return;
-      }
+  // Fetch workflows list
+  const { data: listData, isLoading: listLoading } = useQuery({
+    queryKey: ['workflows'],
+    queryFn: async () => {
+      const res = await client.workflows.$get();
+      return res.json();
+    },
+  });
 
-      try {
-        // Fetch enums and workflows in parallel
-        const [enumsRes, listRes] = await Promise.all([
-          fetch(`${API_URL}/enums`),
-          fetch(`${API_URL}/workflows`),
-        ]);
+  const firstWorkflowId = listData && 'workflows' in listData ? listData.workflows[0]?.id : undefined;
 
-        const enumsData = await enumsRes.json();
-        setEnums(enumsData);
-
-        const listData = await listRes.json();
-        if (!listData.workflows?.[0]) {
-          setError('No workflows found. Run db:seed first.');
-          setLoading(false);
-          return;
-        }
-
-        const workflowId = listData.workflows[0].id;
-        const res = await fetch(`${API_URL}/workflows/${workflowId}`);
-        const result = await res.json();
-        setData(result);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch');
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    fetchData();
-  }, []);
-
-  async function updateTriggerEvent(value: string) {
-    if (!data) return;
-    setSaving(true);
-    try {
-      await fetch(`${API_URL}/workflows/${data.workflow.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trigger_event: value }),
-      });
-      setData({
-        ...data,
-        workflow: { ...data.workflow, trigger_event: value },
-      });
-      setEditing(null);
-    } catch (err) {
-      console.error('Failed to update:', err);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function updateStep(stepId: string, updates: Record<string, unknown>) {
-    if (!data) return;
-    setSaving(true);
-    try {
-      await fetch(`${API_URL}/steps/${stepId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      });
-      // Refetch the workflow to get updated data
-      const res = await fetch(`${API_URL}/workflows/${data.workflow.id}`);
+  // Fetch single workflow detail
+  const { data, isLoading: detailLoading, error } = useQuery({
+    queryKey: ['workflow', firstWorkflowId],
+    queryFn: async () => {
+      const res = await client.workflows[':id'].$get({ param: { id: firstWorkflowId! } });
       const result = await res.json();
-      setData(result);
+      if ('error' in result) throw new Error(result.error);
+      return result;
+    },
+    enabled: !!firstWorkflowId,
+  });
+
+  // Update trigger event mutation
+  const updateTriggerMutation = useMutation({
+    mutationFn: async (value: string) => {
+      if (!data || !('workflow' in data)) return;
+      await client.workflows[':id'].$put({
+        param: { id: data.workflow.id },
+        json: {
+          trigger_event: value as TriggerEvent,
+          name: data.workflow.name,
+          steps: [],
+          edges: [],
+        },
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['workflow', firstWorkflowId] });
       setEditing(null);
-    } catch (err) {
-      console.error('Failed to update:', err);
-    } finally {
-      setSaving(false);
-    }
-  }
+    },
+  });
+
+  // Update step mutation
+  const updateStepMutation = useMutation({
+    mutationFn: async ({ stepId, updates }: { stepId: string; updates: Record<string, unknown> }) => {
+      await client.steps[':id'].$put({
+        param: { id: stepId },
+        json: updates,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['workflow', firstWorkflowId] });
+      setEditing(null);
+    },
+  });
+
+  const loading = listLoading || detailLoading;
 
   if (loading) return <div className="p-6">Loading...</div>;
-  if (error) return <div className="p-6 text-red-500">{error}</div>;
-  if (!data) return <div className="p-6">No data</div>;
+  if (error) return <div className="p-6 text-red-500">{error instanceof Error ? error.message : 'Failed to fetch'}</div>;
+  if (!data || !('workflow' in data)) return <div className="p-6">No workflows found. Run db:seed first.</div>;
+
+  const workflow = data.workflow;
+  const steps = data.steps as Step[];
 
   return (
     <div className="p-6">
-      <h1 className="text-xl font-semibold mb-6">{data.workflow.name}</h1>
+      <h1 className="text-xl font-semibold mb-6">{workflow.name}</h1>
 
       <div className="flex items-center gap-3 flex-wrap">
         {/* Trigger */}
         <div className="relative group">
           <div className="px-4 py-2 bg-green-100 border border-green-300 rounded-lg font-medium flex items-center gap-2">
-            <span>{data.workflow.trigger_event}</span>
+            <span>{workflow.triggerEvent}</span>
             <button
               onClick={() => setEditing({ type: 'trigger' })}
               className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-green-200 rounded"
@@ -181,21 +142,21 @@ export function WorkflowPage() {
             </button>
           </div>
 
-          {editing?.type === 'trigger' && enums && (
+          {editing?.type === 'trigger' && (
             <EditDropdown
-              options={enums.trigger_event}
-              currentValue={data.workflow.trigger_event}
-              onSelect={updateTriggerEvent}
+              options={TRIGGER_EVENTS}
+              currentValue={workflow.triggerEvent}
+              onSelect={(value) => updateTriggerMutation.mutate(value)}
               onClose={() => setEditing(null)}
-              saving={saving}
+              saving={updateTriggerMutation.isPending}
             />
           )}
         </div>
 
         {/* Steps */}
-        {data.steps.map((step) => (
+        {steps.map((step) => (
           <div key={step.id} className="flex items-center gap-3">
-            <span className="text-gray-400 text-xl">→</span>
+            <span className="text-gray-400 text-xl">&rarr;</span>
             <div className="relative group">
               <div className="px-4 py-2 bg-blue-100 border border-blue-300 rounded-lg flex items-center gap-2">
                 <span>{getStepLabel(step)}</span>
@@ -204,7 +165,7 @@ export function WorkflowPage() {
                     setEditing({
                       type: 'step',
                       stepId: step.id,
-                      stepType: step.step_type,
+                      stepType: step.stepType,
                     })
                   }
                   className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-blue-200 rounded"
@@ -215,21 +176,19 @@ export function WorkflowPage() {
               </div>
 
               {editing?.type === 'step' &&
-                editing.stepId === step.id &&
-                enums && (
+                editing.stepId === step.id && (
                   <StepEditPopover
                     step={step}
-                    enums={enums}
-                    onUpdate={(updates) => updateStep(step.id, updates)}
+                    onUpdate={(updates) => updateStepMutation.mutate({ stepId: step.id, updates })}
                     onClose={() => setEditing(null)}
-                    saving={saving}
+                    saving={updateStepMutation.isPending}
                   />
                 )}
             </div>
           </div>
         ))}
 
-        <span className="text-gray-400 text-xl">→</span>
+        <span className="text-gray-400 text-xl">&rarr;</span>
         <div className="px-4 py-2 bg-gray-100 border border-gray-300 rounded-lg">
           End
         </div>
@@ -284,32 +243,30 @@ function EditDropdown({
 
 function StepEditPopover({
   step,
-  enums,
   onUpdate,
   onClose,
   saving,
 }: {
   step: Step;
-  enums: Enums;
   onUpdate: (updates: Record<string, unknown>) => void;
   onClose: () => void;
   saving: boolean;
 }) {
   const getInitialFormData = (): Record<string, string> => {
-    if (step.step_type === 'wait') {
-      return { hours: step.wait_hours?.toString() || '' };
+    if (step.stepType === 'wait') {
+      return { hours: step.waitHours?.toString() || '' };
     }
-    if (step.step_type === 'branch') {
+    if (step.stepType === 'branch') {
       return {
-        user_column: step.branch_user_column || '',
-        operator: step.branch_operator || '',
-        compare_value: step.branch_compare_value || '',
+        user_column: step.branchUserColumn || '',
+        operator: step.branchOperator || '',
+        compare_value: step.branchCompareValue || '',
       };
     }
-    if (step.step_type === 'send') {
+    if (step.stepType === 'send') {
       return {
-        title: step.send_title || '',
-        body: step.send_body || '',
+        title: step.sendTitle || '',
+        body: step.sendBody || '',
       };
     }
     return {};
@@ -318,7 +275,7 @@ function StepEditPopover({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (step.step_type === 'wait') {
+    if (step.stepType === 'wait') {
       onUpdate({ hours: parseInt(formData.hours as string, 10) });
     } else {
       onUpdate(formData);
@@ -329,10 +286,10 @@ function StepEditPopover({
     <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-[280px]">
       <form onSubmit={handleSubmit} className="p-3">
         <div className="text-xs text-gray-500 mb-3 font-medium">
-          Edit {step.step_type} step
+          Edit {step.stepType} step
         </div>
 
-        {step.step_type === 'wait' && (
+        {step.stepType === 'wait' && (
           <div className="mb-3">
             <label className="block text-sm text-gray-700 mb-1">
               Wait hours
@@ -349,7 +306,7 @@ function StepEditPopover({
           </div>
         )}
 
-        {step.step_type === 'branch' && (
+        {step.stepType === 'branch' && (
           <>
             <div className="mb-3">
               <label className="block text-sm text-gray-700 mb-1">
@@ -375,7 +332,7 @@ function StepEditPopover({
                 }
                 className="w-full border border-gray-300 rounded px-3 py-2"
               >
-                {enums.branch_operator.map((op) => (
+                {BRANCH_OPERATORS.map((op) => (
                   <option key={op} value={op}>
                     {op}
                   </option>
@@ -398,7 +355,7 @@ function StepEditPopover({
           </>
         )}
 
-        {step.step_type === 'send' && (
+        {step.stepType === 'send' && (
           <>
             <div className="mb-3">
               <label className="block text-sm text-gray-700 mb-1">Title</label>
