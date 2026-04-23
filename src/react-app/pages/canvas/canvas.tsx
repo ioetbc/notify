@@ -5,7 +5,6 @@ import {
   ReactFlow,
   Background,
   Controls,
-  MiniMap,
   addEdge,
   useNodesState,
   useEdgesState,
@@ -78,36 +77,34 @@ function createNodeData(type: StepType): StepNodeData {
   }
 }
 
-let nodeId = 0;
 function getNodeId() {
-  return `step_${nodeId++}`;
+  return crypto.randomUUID();
 }
 
 // Convert DB workflow response to canvas nodes/edges
 interface DbStep {
   id: string;
-  stepType: 'wait' | 'branch' | 'send';
-  waitHours: number | null;
-  waitNextStepId: string | null;
-  branchUserColumn: string | null;
-  branchOperator: string | null;
-  branchCompareValue: string | null;
-  branchTrueStepId: string | null;
-  branchFalseStepId: string | null;
-  sendTitle: string | null;
-  sendBody: string | null;
-  sendNextStepId: string | null;
+  type: 'wait' | 'branch' | 'send';
+  config: Record<string, unknown>;
+}
+
+interface DbEdge {
+  id: string;
+  source: string;
+  target: string;
+  handle: string | null;
 }
 
 function dbToCanvas(
   workflow: { id: string; name: string; triggerEvent: TriggerEvent },
-  steps: DbStep[]
+  steps: DbStep[],
+  dbEdges: DbEdge[]
 ): { nodes: CanvasNode[]; edges: Edge[] } {
   const nodes: CanvasNode[] = [];
   const edges: Edge[] = [];
 
   // Create trigger node
-  const triggerNode: CanvasNode = {
+  nodes.push({
     id: 'trigger',
     type: 'trigger' as const,
     position: { x: 0, y: 0 },
@@ -116,119 +113,48 @@ function dbToCanvas(
       config: { event: workflow.triggerEvent },
       label: 'Trigger',
     },
-  };
-  nodes.push(triggerNode);
+  });
 
-  // Create step nodes
-  for (const step of steps) {
-    if (step.stepType === 'wait') {
-      nodes.push({
-        id: step.id,
-        type: 'wait' as const,
-        position: { x: 0, y: 0 },
-        data: {
-          type: 'wait' as const,
-          config: { hours: step.waitHours || 24 },
-          label: 'Wait',
-        },
-      });
-    } else if (step.stepType === 'branch') {
-      nodes.push({
-        id: step.id,
-        type: 'branch' as const,
-        position: { x: 0, y: 0 },
-        data: {
-          type: 'branch' as const,
-          config: {
-            user_column: step.branchUserColumn || '',
-            operator: (step.branchOperator || '=') as BranchNodeData['config']['operator'],
-            compare_value: step.branchCompareValue || '',
-          },
-          label: 'Branch',
-        },
-      });
-    } else {
-      nodes.push({
-        id: step.id,
-        type: 'send' as const,
-        position: { x: 0, y: 0 },
-        data: {
-          type: 'send' as const,
-          config: {
-            title: step.sendTitle || 'Notification',
-            body: step.sendBody || '',
-          },
-          label: 'Send',
-        },
-      });
-    }
+  // Create step nodes — config passes through directly
+  for (const s of steps) {
+    const label = s.type.charAt(0).toUpperCase() + s.type.slice(1);
+    nodes.push({
+      id: s.id,
+      type: s.type,
+      position: { x: 0, y: 0 },
+      data: { type: s.type, config: s.config, label } as StepNodeData,
+    });
   }
 
-  // Build edges from step references
+  // Map DB edges to React Flow edges
   const stepsWithIncoming = new Set<string>();
-
-  for (const step of steps) {
-    if (step.stepType === 'wait' && step.waitNextStepId) {
-      edges.push({
-        id: `${step.id}-${step.waitNextStepId}`,
-        source: step.id,
-        target: step.waitNextStepId,
-        animated: true,
-        markerEnd: { type: MarkerType.ArrowClosed },
-      });
-      stepsWithIncoming.add(step.waitNextStepId);
-    } else if (step.stepType === 'send' && step.sendNextStepId) {
-      edges.push({
-        id: `${step.id}-${step.sendNextStepId}`,
-        source: step.id,
-        target: step.sendNextStepId,
-        animated: true,
-        markerEnd: { type: MarkerType.ArrowClosed },
-      });
-      stepsWithIncoming.add(step.sendNextStepId);
-    } else if (step.stepType === 'branch') {
-      if (step.branchTrueStepId) {
-        edges.push({
-          id: `${step.id}-yes-${step.branchTrueStepId}`,
-          source: step.id,
-          target: step.branchTrueStepId,
-          sourceHandle: 'yes',
-          animated: true,
-          markerEnd: { type: MarkerType.ArrowClosed },
-        });
-        stepsWithIncoming.add(step.branchTrueStepId);
-      }
-      if (step.branchFalseStepId) {
-        edges.push({
-          id: `${step.id}-no-${step.branchFalseStepId}`,
-          source: step.id,
-          target: step.branchFalseStepId,
-          sourceHandle: 'no',
-          animated: true,
-          markerEnd: { type: MarkerType.ArrowClosed },
-        });
-        stepsWithIncoming.add(step.branchFalseStepId);
-      }
-    }
+  for (const e of dbEdges) {
+    edges.push({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      sourceHandle: e.handle ?? undefined,
+      animated: true,
+      markerEnd: { type: MarkerType.ArrowClosed },
+    });
+    stepsWithIncoming.add(e.target);
   }
 
-  // Connect trigger to first step (step with no incoming edges)
-  for (const step of steps) {
-    if (!stepsWithIncoming.has(step.id)) {
+  // Connect trigger to root step (no incoming edges)
+  for (const s of steps) {
+    if (!stepsWithIncoming.has(s.id)) {
       edges.push({
-        id: `trigger-${step.id}`,
+        id: `trigger-${s.id}`,
         source: 'trigger',
-        target: step.id,
+        target: s.id,
         animated: true,
         markerEnd: { type: MarkerType.ArrowClosed },
       });
-      break; // Only connect to first root step
+      break;
     }
   }
 
-  // Apply auto-layout
-  const layouted = getLayoutedElements(nodes, edges);
-  return layouted;
+  return getLayoutedElements(nodes, edges);
 }
 
 export function Canvas() {
@@ -264,7 +190,8 @@ export function Canvas() {
       setWorkflowName(data.workflow.name);
       const { nodes: layoutedNodes, edges: layoutedEdges } = dbToCanvas(
         data.workflow as { id: string; name: string; triggerEvent: TriggerEvent },
-        data.steps as DbStep[]
+        data.steps as DbStep[],
+        (data as { edges: DbEdge[] }).edges
       );
       setNodes(layoutedNodes);
       setEdges(layoutedEdges);
@@ -282,36 +209,15 @@ export function Canvas() {
         : 'contact_added') as TriggerEvent;
 
       const stepsPayload = nodes
-        .filter((n): n is CanvasNode & { data: WaitNodeData | BranchNodeData | SendNodeData } => n.data.type !== 'trigger')
-        .map((n) => {
-          const d = n.data;
-          if (d.type === 'wait') {
-            return { id: n.id, type: 'wait' as const, config: { hours: d.config.hours } };
-          } else if (d.type === 'branch') {
-            return {
-              id: n.id,
-              type: 'branch' as const,
-              config: {
-                user_column: d.config.user_column,
-                operator: d.config.operator,
-                compare_value: d.config.compare_value ?? null,
-              },
-            };
-          } else {
-            return {
-              id: n.id,
-              type: 'send' as const,
-              config: { title: d.config.title, body: d.config.body },
-            };
-          }
-        });
+        .filter((n) => n.data.type !== 'trigger')
+        .map((n) => ({ id: n.id, type: n.data.type, config: n.data.config }));
 
       const canvasEdges = edges
         .filter((e) => e.source !== 'trigger')
         .map((e) => ({
           source: e.source,
           target: e.target,
-          sourceHandle: e.sourceHandle ?? undefined,
+          handle: e.sourceHandle ?? undefined,
         }));
 
       if (workflowId) {
@@ -467,24 +373,9 @@ export function Canvas() {
             >
               <Background gap={15} size={1} />
               <Controls />
-              <MiniMap
-                nodeColor={(node) => {
-                  switch (node.type) {
-                    case 'wait':
-                      return '#fbbf24';
-                    case 'branch':
-                      return '#a855f7';
-                    case 'send':
-                      return '#3b82f6';
-                    default:
-                      return '#6b7280';
-                  }
-                }}
-              />
             </ReactFlow>
           </div>
 
-          {/* Config Panel */}
           {selectedNode && (
             <ConfigPanel
               node={selectedNode}

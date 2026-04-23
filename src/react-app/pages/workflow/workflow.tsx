@@ -8,13 +8,8 @@ const BRANCH_OPERATORS = ['=', '!=', 'exists', 'not_exists'] as const;
 
 interface Step {
   id: string;
-  stepType: 'wait' | 'branch' | 'send';
-  waitHours: number | null;
-  branchUserColumn: string | null;
-  branchOperator: string | null;
-  branchCompareValue: string | null;
-  sendTitle: string | null;
-  sendBody: string | null;
+  type: 'wait' | 'branch' | 'send';
+  config: Record<string, unknown>;
 }
 
 interface EditingState {
@@ -24,15 +19,15 @@ interface EditingState {
 }
 
 function getStepLabel(step: Step): string {
-  switch (step.stepType) {
+  switch (step.type) {
     case 'wait':
-      return `Wait ${step.waitHours}h`;
+      return `Wait ${step.config.hours}h`;
     case 'branch':
-      return `If ${step.branchUserColumn} ${step.branchOperator} "${step.branchCompareValue}"`;
+      return `If ${step.config.user_column} ${step.config.operator} "${step.config.compare_value}"`;
     case 'send':
-      return `Send: "${step.sendTitle}"`;
+      return `Send: "${step.config.title}"`;
     default:
-      return step.stepType;
+      return step.type;
   }
 }
 
@@ -165,7 +160,7 @@ export function WorkflowPage() {
                     setEditing({
                       type: 'step',
                       stepId: step.id,
-                      stepType: step.stepType,
+                      stepType: step.type,
                     })
                   }
                   className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-blue-200 rounded"
@@ -253,20 +248,20 @@ function StepEditPopover({
   saving: boolean;
 }) {
   const getInitialFormData = (): Record<string, string> => {
-    if (step.stepType === 'wait') {
-      return { hours: step.waitHours?.toString() || '' };
+    if (step.type === 'wait') {
+      return { hours: String(step.config.hours ?? '') };
     }
-    if (step.stepType === 'branch') {
+    if (step.type === 'branch') {
       return {
-        user_column: step.branchUserColumn || '',
-        operator: step.branchOperator || '',
-        compare_value: step.branchCompareValue || '',
+        user_column: String(step.config.user_column ?? ''),
+        operator: String(step.config.operator ?? ''),
+        compare_value: String(step.config.compare_value ?? ''),
       };
     }
-    if (step.stepType === 'send') {
+    if (step.type === 'send') {
       return {
-        title: step.sendTitle || '',
-        body: step.sendBody || '',
+        title: String(step.config.title ?? ''),
+        body: String(step.config.body ?? ''),
       };
     }
     return {};
@@ -275,10 +270,10 @@ function StepEditPopover({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (step.stepType === 'wait') {
-      onUpdate({ hours: parseInt(formData.hours as string, 10) });
+    if (step.type === 'wait') {
+      onUpdate({ config: { hours: parseInt(formData.hours as string, 10) } });
     } else {
-      onUpdate(formData);
+      onUpdate({ config: formData });
     }
   }
 
@@ -286,10 +281,10 @@ function StepEditPopover({
     <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-[280px]">
       <form onSubmit={handleSubmit} className="p-3">
         <div className="text-xs text-gray-500 mb-3 font-medium">
-          Edit {step.stepType} step
+          Edit {step.type} step
         </div>
 
-        {step.stepType === 'wait' && (
+        {step.type === 'wait' && (
           <div className="mb-3">
             <label className="block text-sm text-gray-700 mb-1">
               Wait hours
@@ -306,7 +301,7 @@ function StepEditPopover({
           </div>
         )}
 
-        {step.stepType === 'branch' && (
+        {step.type === 'branch' && (
           <>
             <div className="mb-3">
               <label className="block text-sm text-gray-700 mb-1">
@@ -355,7 +350,7 @@ function StepEditPopover({
           </>
         )}
 
-        {step.stepType === 'send' && (
+        {step.type === 'send' && (
           <>
             <div className="mb-3">
               <label className="block text-sm text-gray-700 mb-1">Title</label>
