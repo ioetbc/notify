@@ -9,6 +9,7 @@ import type {
   BranchNodeData,
   SendNodeData,
   FilterNodeData,
+  ExitNodeData,
   StepConfig,
 } from './types';
 import { getLayoutedElements } from './layout';
@@ -62,6 +63,12 @@ export function createNodeData(type: StepType): StepNodeData {
         config: { attribute_key: '', operator: '=', compare_value: '' },
         label: 'Filter',
       } as FilterNodeData;
+    case 'exit':
+      return {
+        type: 'exit',
+        config: {},
+        label: 'Exit',
+      } as ExitNodeData;
   }
 }
 
@@ -71,7 +78,7 @@ export function getNodeId() {
 
 export interface ApiStep {
   id: string;
-  type: 'wait' | 'branch' | 'send' | 'filter';
+  type: 'wait' | 'branch' | 'send' | 'filter' | 'exit';
   config: StepConfig;
 }
 

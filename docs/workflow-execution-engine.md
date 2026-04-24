@@ -94,102 +94,135 @@ Each public API endpoint checks for matching active workflows by trigger type an
 
 ---
 
-## 4. Cron Job
+## 4. Step Walker
 
-**Frequency:** Every hour.
+The step walker is the core processing engine. It finds enrollments that are ready to be processed, walks each user through their workflow steps, and updates enrollment state along the way.
 
-**Logic:**
-1. Query all `workflow_enrollment` rows where `process_at <= now()` AND `status = 'active'`
-2. For each enrollment, push a message onto the SQS queue containing:
-   ```json
-   {
-     "enrollment_id": "uuid",
-     "user_id": "uuid",
-     "workflow_id": "uuid",
-     "current_step_id": "uuid"
-   }
-   ```
-3. Update enrollment status to `processing` (optional — prevents the next cron from re-queuing the same enrollment)
+All logic lives in two layers:
 
-**Infrastructure:** SST cron construct triggering a Lambda function.
+- **Service layer** — `server/services/enrollment/enrollment.ts`
+- **Repository layer** — `server/repository/enrollment/enrollment.ts`
 
----
+### 4a. Entry point — `processReadyEnrollments()`
 
-## 5. SQS Queue + Dead Letter Queue
+`server/services/enrollment/enrollment.ts`
 
-- **Main queue** — receives enrollment messages from the cron
-- **DLQ** — messages that fail after N retries land here
-- Configure max receive count (e.g. 3 retries before DLQ)
-- Lambda trigger on the main queue
+This is the function that the cron job (or Lambda) will call. It orchestrates the full processing cycle:
 
----
+1. **Query** — calls `findReadyEnrollments()` which selects all `workflow_enrollment` rows where `status = 'active'` AND `process_at <= now()`
+2. **Lock** — for each enrollment, sets `status` to `processing` before walking. This prevents overlapping cron invocations from picking up the same enrollment
+3. **Walk** — calls `processEnrollment(enrollment)` with the full enrollment object (no re-fetch)
+4. **Error handling** — if processing throws, resets enrollment to `active` so the next cron tick retries it. If the recovery update itself fails (e.g. DB is down), logs a CRITICAL error — the enrollment will be stuck in `processing` and needs manual intervention
+5. **Returns** — `{ processed: number, failed: number, results: [...] }` for observability
 
-## 6. Step Walker Lambda
+### 4b. Single enrollment processing — `processEnrollment(enrollment)`
 
-The core processing logic. Consumes messages from SQS and walks the user through the workflow.
+`server/services/enrollment/enrollment.ts`
 
-### Processing loop
+Takes a full `WorkflowEnrollment` object. Loads the user, all workflow steps, and all edges, then enters a `while` loop starting from `enrollment.currentStepId`.
 
-For each message:
+Each iteration calls `walkStep()` which returns one of four actions:
 
-1. Load the enrollment, user, workflow steps, and step edges
-2. Start at `current_step_id`
-3. **Walk the chain** until you hit a `wait` step or reach the end:
+| Action | What happens | Terminal? |
+|---|---|---|
+| `continue` | Advance `currentStepId` to the next step, keep looping | No |
+| `wait` | Update enrollment: `currentStepId` = next step, `processAt` = `now + hours`, `status` = `active`. Stop walking | Yes |
+| `exit` | Update enrollment: `currentStepId` = null, `processAt` = null, `status` = `exited`. Stop walking | Yes |
+| `complete` | Update enrollment: `currentStepId` = null, `processAt` = null, `status` = `completed`. Stop walking | Yes |
 
-#### Step type handling
+If the loop ends without hitting a terminal action (e.g. `currentStepId` points to a step that doesn't exist), the enrollment is marked `completed`.
+
+### 4c. Step type handling — `walkStep()`
+
+`server/services/enrollment/enrollment.ts`
+
+Uses `ts-pattern` exhaustive matching on `step.type`:
 
 **send**
-- Read the step config (title, body)
-- Call Expo Push API to deliver the notification (future — for MVP, just log it)
-- Follow the single outgoing edge to the next step
-- Continue walking
+- Logs the notification title and body (Expo Push API integration is out of scope for MVP)
+- Follows the single outgoing edge → `continue`
+- If no outgoing edge → `complete`
 
 **branch**
-- Read the branch config (`user_column`, `operator`, `compare_value`)
-- Look up the user's attributes
-- **If the attribute key doesn't exist on the user:** exit the user from the workflow (set enrollment status to `exited`). Do NOT send them down the false path.
-- Evaluate the condition:
-  - `=` — attribute value matches compare_value → `true` edge
-  - `!=` — attribute value doesn't match → `true` edge
-  - `exists` — attribute key is present → `true` edge
-  - `not_exists` — attribute key is absent → `true` edge
-- Follow the edge where `handle` matches the boolean result
-- Continue walking
+- Reads `BranchConfig`: `{ user_column, operator, compare_value }`
+- If the attribute key doesn't exist on the user → `exit` (user is removed from the workflow)
+- Evaluates the condition using `evaluateBranchCondition()`:
+  - `=` — string equality
+  - `!=` — string inequality
+  - `exists` — attribute key is present
+  - `not_exists` — attribute key is absent
+- Follows the edge where `handle` matches the boolean result (`true` or `false` branch)
+- If matching edge exists → `continue`, otherwise → `complete`
 
 **filter**
-- Similar to branch but with a single outgoing edge
-- Evaluate the filter condition against user attributes
-- If the user passes: follow the edge, continue walking
-- If the user fails: exit the workflow (set enrollment status to `exited`)
+- Reads `FilterConfig`: `{ attribute_key, operator, compare_value }`
+- Evaluates using `evaluateFilterCondition()`:
+  - `=` — string equality
+  - `!=` — string inequality
+  - `>` — numeric greater than
+  - `<` — numeric less than
+- If user fails the condition → `exit`
+- If user passes, follows the single outgoing edge → `continue`, or → `complete` if no edge
 
 **wait**
-- Update `current_step_id` to the next step (follow the outgoing edge)
-- Set `process_at` to `now() + wait_duration_in_hours`
-- Set status back to `active`
-- **Stop walking** — the next cron cycle will pick this enrollment up again
+- Reads `WaitConfig`: `{ hours }`
+- Follows the outgoing edge to find the next step
+- Returns `wait` with `processAt = now + hours` and `nextStepId` = the step after the wait
+- If no outgoing edge → `complete`
 
-#### End of workflow
+### 4d. Edge traversal — `findOutgoingEdge()`
 
-If there's no outgoing edge from the current step, the workflow is complete:
-- Set enrollment status to `completed`
-- Stop walking
+`server/services/enrollment/enrollment.ts`
 
-### Failure / retry behaviour
+Finds the outgoing edge from a step. For branch steps, pass `handleMatch` (boolean) to select the correct branch. For all other step types, returns the first edge where `source` matches.
 
-- If the Lambda errors mid-walk, the message goes back on the queue
-- On retry, processing resumes from whatever `current_step_id` is stored on the enrollment
-- Branch/filter conditions are re-evaluated with fresh user data — this is intentionally correct (user state may have changed)
-- After max retries, message goes to DLQ for investigation
+### 4e. Repository functions
+
+`server/repository/enrollment/enrollment.ts`
+
+| Function | Purpose |
+|---|---|
+| `findReadyEnrollments()` | Select enrollments where `status = 'active'` AND `processAt <= now()` |
+| `findUserById(userId)` | Load user record with attributes |
+| `findStepsByWorkflowId(workflowId)` | Load all steps for a workflow |
+| `findEdgesByWorkflowId(workflowId)` | Load all edges for a workflow |
+| `updateEnrollment(id, values)` | Partial update — `currentStepId`, `processAt`, `status` |
+
+### 4f. Enrollment status lifecycle
+
+```
+active → processing → active (on wait, or on failure retry)
+active → processing → completed (reached end of workflow)
+active → processing → exited (failed branch/filter condition)
+```
+
+The `processing` status is a lock — it prevents overlapping cron invocations from double-processing the same enrollment. Only `active` enrollments are picked up by `findReadyEnrollments()`.
+
+### 4g. Wait handling
+
+Wait duration is always determined by the step walker, never by the enrollment function. When `enrollUser()` creates a new enrollment, it sets `processAt = now()` regardless of the first step type. The walker then handles the wait by setting `processAt = now + hours` and advancing `currentStepId` to the step after the wait.
+
+This means the cron picks up the enrollment immediately, the walker sees a wait step, schedules it for the future, and stops. The next cron tick picks it up when `processAt` has passed.
+
+### 4h. Failure / retry behaviour
+
+- If `processEnrollment` throws, the enrollment is reset to `active` so the next cron tick retries it
+- On retry, the walker resumes from whatever `currentStepId` is stored — partial progress is preserved
+- Branch/filter conditions are re-evaluated with fresh user data on retry (user state may have changed between attempts)
+- If the recovery update also fails, the enrollment is stuck in `processing` and logged as CRITICAL for manual investigation
 
 ---
 
 ## 7. Implementation Order
 
-1. **Database migration** — `handle` column to boolean, drop unique constraint, verify enrollment columns
-2. **Publish endpoint + UI** — `PATCH /workflows/:id/publish`, publish button in canvas
-3. **Shared enrollment function** — `enrollUser` with `current_step_id` and `process_at` logic
-4. **Three trigger entry points** — wire `enrollUser` into events, user creation, and user update endpoints
-5. **Step walker function** — the core logic that walks a user through steps until a wait or end
+1. ~~**Database migration** — `handle` column to boolean, drop unique constraint, verify enrollment columns~~ DONE
+2. ~~**Publish endpoint + UI** — `PATCH /workflows/:id/publish`, publish button in canvas~~ DONE
+3. ~~**Shared enrollment function** — `enrollUser` with `current_step_id` and `process_at` logic~~ DONE
+4. ~~**Three trigger entry points** — wire `enrollUser` into events, user creation, and user update endpoints~~ DONE
+5. ~~**Step walker function** — the core logic that walks a user through steps until a wait or end~~ DONE
+6. **Cron infrastructure** — SST cron construct that calls `processReadyEnrollments()` on a schedule
+7. **SQS queue + DLQ** — queue for enrollment messages, dead letter queue for failed processing
+8. **Expo Push API integration** — replace console.log in send step with actual push delivery
 
 ---
 
@@ -200,7 +233,5 @@ If there's no outgoing edge from the current step, the workflow is complete:
 - Analytics / delivery receipts / Expo receipt polling
 - Notification logging table
 - UI indicators showing where users are in a workflow
-- SQS queue + DLQ infrastructure
-- Cron job to queue ready enrollments
 - Expo Push API integration (send step just logs for now)
-- Dedicated step walker Lambda (logic exists but isn't on its own Lambda yet)
+- Infinite loop protection (cyclic workflows)

@@ -48,6 +48,11 @@ export function ConfigPanel({ node, onUpdate, onClose, userColumns, eventNames }
       {data.type === 'filter' && (
         <FilterConfig config={data.config} onUpdate={onUpdate} userColumns={userColumns} />
       )}
+      {data.type === 'exit' && (
+        <p className="text-sm text-gray-500">
+          This step ends the workflow early. The enrollment will be marked as exited.
+        </p>
+      )}
     </div>
   );
 }

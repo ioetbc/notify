@@ -1,6 +1,6 @@
 import { Handle, Position, type NodeProps, type Node } from '@xyflow/react';
-import { Clock, GitBranch, Bell, Zap, Filter } from 'lucide-react';
-import type { TriggerNodeData, WaitNodeData, BranchNodeData, SendNodeData, FilterNodeData } from './types';
+import { Clock, GitBranch, Bell, Zap, Filter, LogOut } from 'lucide-react';
+import type { TriggerNodeData, WaitNodeData, BranchNodeData, SendNodeData, FilterNodeData, ExitNodeData } from './types';
 
 const baseNodeStyles = 'px-4 py-3 rounded-lg border-2 shadow-sm min-w-[150px]';
 
@@ -171,10 +171,32 @@ export function FilterNode({ data, selected }: NodeProps<FilterNode>) {
   );
 }
 
+type ExitNode = Node<ExitNodeData, 'exit'>;
+
+export function ExitNode({ selected }: NodeProps<ExitNode>) {
+  return (
+    <div
+      className={`${baseNodeStyles} bg-red-50 border-red-300 ${
+        selected ? 'ring-2 ring-red-500' : ''
+      }`}
+    >
+      <Handle type="target" position={Position.Top} className="!bg-red-500" />
+      <div className="flex items-center gap-2">
+        <LogOut className="w-4 h-4 text-red-600" />
+        <div>
+          <div className="text-xs text-red-600 font-medium">Exit</div>
+          <div className="text-sm font-semibold text-red-800">Exit workflow</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export const nodeTypes = {
   trigger: TriggerNode,
   wait: WaitNode,
   branch: BranchNode,
   send: SendNode,
   filter: FilterNode,
+  exit: ExitNode,
 };
