@@ -1,8 +1,6 @@
-import { addHours } from "date-fns";
 import * as repository from "../../repository/public";
 import * as workflowRepo from "../../repository/workflow";
 import type { Attributes } from "../../schemas/public";
-import type { WaitConfig } from "../../db/schema";
 
 export async function createUser(
   customerId: string,
@@ -88,17 +86,11 @@ export async function enrollUser(userId: string, workflowId: string) {
 
   if (!firstStep) return null;
 
-  const now = new Date();
-  const processAt =
-    firstStep.type === "wait"
-      ? addHours(now, (firstStep.config as WaitConfig).hours)
-      : now;
-
   return repository.createWorkflowEnrollment({
     userId,
     workflowId,
     currentStepId: firstStep.id,
-    processAt,
+    processAt: new Date(),
   });
 }
 

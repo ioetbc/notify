@@ -54,9 +54,6 @@ const routes = app
       const externalId = c.req.param("external_id");
       const { attributes } = c.req.valid("json");
 
-      console.log('customerId', customerId)
-      console.log('externalId', externalId)
-
       const result = await service.updateUserAttributes(
         customerId,
         externalId,

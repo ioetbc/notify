@@ -19,12 +19,6 @@ export async function findReadyEnrollments() {
     );
 }
 
-export async function findEnrollmentById(enrollmentId: string) {
-  return db.query.workflowEnrollment.findFirst({
-    where: eq(workflowEnrollment.id, enrollmentId),
-  });
-}
-
 export async function findUserById(userId: string) {
   return db.query.user.findFirst({
     where: eq(user.id, userId),
@@ -43,8 +37,8 @@ export async function updateEnrollment(
   enrollmentId: string,
   values: Partial<{
     currentStepId: string | null;
-    processAt: Date;
-    status: "active" | "completed" | "exited";
+    processAt: Date | null;
+    status: "active" | "processing" | "completed" | "exited";
   }>
 ) {
   const [updated] = await db

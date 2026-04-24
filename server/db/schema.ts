@@ -11,12 +11,13 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
-export const stepTypeEnum = pgEnum("step_type", ["wait", "branch", "send", "filter"]);
+export const stepTypeEnum = pgEnum("step_type", ["wait", "branch", "send", "filter", "exit"]);
 
 export const triggerTypeEnum = pgEnum("trigger_type", ["system", "custom"]);
 
 export const enrollmentStatusEnum = pgEnum("enrollment_status", [
   "active",
+  "processing",
   "completed",
   "exited",
 ]);
@@ -83,7 +84,8 @@ export type FilterConfig = {
   operator: "=" | "!=" | ">" | "<";
   compare_value: string | number | boolean;
 };
-export type StepConfig = WaitConfig | BranchConfig | SendConfig | FilterConfig;
+export type ExitConfig = Record<string, never>;
+export type StepConfig = WaitConfig | BranchConfig | SendConfig | FilterConfig | ExitConfig;
 
 export const step = pgTable("step", {
   id: uuid("id").primaryKey().defaultRandom(),

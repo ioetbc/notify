@@ -3,6 +3,7 @@ import { handle } from "hono/aws-lambda";
 import { db, user, event } from "../../db";
 import { eq, sql } from "drizzle-orm";
 import { workflows } from "./workflows";
+import { processReadyEnrollments } from "../../services/enrollment";
 const app = new Hono();
 
 function getCustomerId(c: { req: { header: (name: string) => string | undefined } }) {
@@ -22,7 +23,7 @@ const routes = app
         values: sql<string[]>`array_agg(DISTINCT v::text)`,
       })
       .from(
-        sql`(SELECT k, ${user.attributes} -> k AS v FROM ${user}, jsonb_object_keys(${user.attributes}) AS k WHERE ${user.customerId} = ${customerId}) AS sub`
+        sql`(SELECT k, ${user.attributes} ->> k AS v FROM ${user}, jsonb_object_keys(${user.attributes}) AS k WHERE ${user.customerId} = ${customerId}) AS sub`
       )
       .groupBy(sql`k`);
 
@@ -44,6 +45,10 @@ const routes = app
     const eventNames = result.map((row) => row.eventName);
 
     return c.json({ event_names: eventNames }, 200);
+  })
+  .post("/enrollments/process", async (c) => {
+    const result = await processReadyEnrollments();
+    return c.json(result, 200);
   });
 
 export type AppType = typeof routes;

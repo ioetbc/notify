@@ -1,10 +1,11 @@
-import type { WaitConfig, BranchConfig, SendConfig, FilterConfig } from "../../db/schema";
+import type { WaitConfig, BranchConfig, SendConfig, FilterConfig, ExitConfig } from "../../db/schema";
 
 export type CanvasStep =
   | { id: string; type: "wait"; config: WaitConfig }
   | { id: string; type: "branch"; config: BranchConfig }
   | { id: string; type: "send"; config: SendConfig }
-  | { id: string; type: "filter"; config: FilterConfig };
+  | { id: string; type: "filter"; config: FilterConfig }
+  | { id: string; type: "exit"; config: ExitConfig };
 
 export type CanvasEdge = {
   source: string;
