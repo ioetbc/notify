@@ -9,3 +9,6 @@ To run a db seed:
 
 To start dev environment:
 `bunx sst dev`
+
+To run tests locally:
+`bunx sst shell -- bun test`
