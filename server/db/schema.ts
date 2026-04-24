@@ -131,6 +131,21 @@ export const workflowEnrollment = pgTable(
 );
 
 
+export const communicationLog = pgTable("communication_log", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  enrollmentId: uuid("enrollment_id")
+    .notNull()
+    .references(() => workflowEnrollment.id, { onDelete: "cascade" }),
+  stepId: uuid("step_id")
+    .notNull()
+    .references(() => step.id, { onDelete: "cascade" }),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  config: jsonb("config").$type<SendConfig>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
 export const event = pgTable("event", {
   id: uuid("id").primaryKey().defaultRandom(),
   customerId: uuid("customer_id")

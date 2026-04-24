@@ -154,6 +154,15 @@ export async function processEnrollment(enrollment: WorkflowEnrollment) {
 
     console.log(`[step-walker] Walking step ${currentStep.id} (type: ${currentStep.type})`);
 
+    if (currentStep.type === "send") {
+      await repository.insertCommunicationLog({
+        enrollmentId: enrollment.id,
+        stepId: currentStep.id,
+        userId: enrollment.userId,
+        config: currentStep.config as SendConfig,
+      });
+    }
+
     const result = walkStep(
       currentStep,
       edges,

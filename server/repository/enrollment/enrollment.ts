@@ -5,7 +5,9 @@ import {
   step,
   stepEdge,
   workflowEnrollment,
+  communicationLog,
 } from "../../db";
+import type { SendConfig } from "../../db/schema";
 
 export async function findReadyEnrollments() {
   return db
@@ -47,4 +49,24 @@ export async function updateEnrollment(
     .where(eq(workflowEnrollment.id, enrollmentId))
     .returning();
   return updated;
+}
+
+export async function insertCommunicationLog(values: {
+  enrollmentId: string;
+  stepId: string;
+  userId: string;
+  config: SendConfig;
+}) {
+  const [row] = await db
+    .insert(communicationLog)
+    .values(values)
+    .returning();
+  return row;
+}
+
+export async function findCommunicationLogsByEnrollmentId(enrollmentId: string) {
+  return db
+    .select()
+    .from(communicationLog)
+    .where(eq(communicationLog.enrollmentId, enrollmentId));
 }

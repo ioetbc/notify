@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, mock } from "bun:test";
-import type { Step, StepEdge, WorkflowEnrollment, WaitConfig, BranchConfig, SendConfig, FilterConfig, ExitConfig } from "../../db/schema";
+import type { Step, StepEdge, WorkflowEnrollment } from "../../db/schema";
 
 // ── Mock: repository/enrollment ──────────────────────────────────────
 const mockFindReadyEnrollments = mock<any>();
@@ -7,6 +7,7 @@ const mockFindUserById = mock<any>();
 const mockFindStepsByWorkflowId = mock<any>();
 const mockFindEdgesByWorkflowId = mock<any>();
 const mockUpdateEnrollment = mock<any>();
+const mockInsertCommunicationLog = mock<any>();
 
 mock.module("../../repository/enrollment", () => ({
   findReadyEnrollments: mockFindReadyEnrollments,
@@ -14,6 +15,7 @@ mock.module("../../repository/enrollment", () => ({
   findStepsByWorkflowId: mockFindStepsByWorkflowId,
   findEdgesByWorkflowId: mockFindEdgesByWorkflowId,
   updateEnrollment: mockUpdateEnrollment,
+  insertCommunicationLog: mockInsertCommunicationLog,
 }));
 
 // ── Import service under test (after mocks) ──────────────────────────
@@ -22,71 +24,41 @@ import {
   processReadyEnrollments,
 } from "./enrollment";
 
-// ── Helpers ──────────────────────────────────────────────────────────
+// ── Shared setup ─────────────────────────────────────────────────────
 
-const WORKFLOW_ID = "wf-1";
-const USER_ID = "user-1";
-
-type StepConfigMap = {
-  wait: WaitConfig;
-  branch: BranchConfig;
-  send: SendConfig;
-  filter: FilterConfig;
-  exit: ExitConfig;
-};
-
-function makeStep<T extends keyof StepConfigMap>(id: string, type: T, config: StepConfigMap[T]): Step {
-  return { id, workflowId: WORKFLOW_ID, type, config, createdAt: new Date() };
-}
-
-function makeEdge(source: string, target: string, handle?: boolean): StepEdge {
-  return {
-    id: `edge-${source}-${target}`,
-    workflowId: WORKFLOW_ID,
-    source,
-    target,
-    handle: handle ?? null,
-  };
-}
-
-function makeEnrollment(overrides?: Partial<WorkflowEnrollment>): WorkflowEnrollment {
-  return {
-    id: "enr-1",
-    userId: USER_ID,
-    workflowId: WORKFLOW_ID,
-    currentStepId: "step-1",
-    status: "active",
-    processAt: new Date(),
-    createdAt: new Date(),
-    ...overrides,
-  };
-}
-
-function makeUser(attributes: Record<string, string | number | boolean> = {}) {
-  return {
-    id: USER_ID,
+function setupMocks({
+  steps,
+  edges,
+  userAttributes = {},
+}: {
+  steps: Step[];
+  edges: StepEdge[];
+  userAttributes?: Record<string, string | number | boolean>;
+}) {
+  mockFindUserById.mockResolvedValue({
+    id: "user-1",
     customerId: "cust-1",
     externalId: "ext-1",
     phone: null,
     gender: null,
-    attributes,
+    attributes: userAttributes,
     createdAt: new Date(),
-  };
-}
-
-/** Set up repository mocks for a given step/edge graph and user attributes */
-function setupGraph(
-  steps: Step[],
-  edges: StepEdge[],
-  attributes: Record<string, string | number | boolean> = {}
-) {
-  mockFindUserById.mockResolvedValue(makeUser(attributes));
+  });
   mockFindStepsByWorkflowId.mockResolvedValue(steps);
   mockFindEdgesByWorkflowId.mockResolvedValue(edges);
   mockUpdateEnrollment.mockResolvedValue({});
+  mockInsertCommunicationLog.mockResolvedValue({});
 }
 
-// ── Reset mocks ──────────────────────────────────────────────────────
+const enrollment: WorkflowEnrollment = {
+  id: "enr-1",
+  userId: "user-1",
+  workflowId: "wf-1",
+  currentStepId: "step-1",
+  status: "active",
+  processAt: new Date(),
+  createdAt: new Date(),
+};
 
 beforeEach(() => {
   mockFindReadyEnrollments.mockReset();
@@ -94,37 +66,34 @@ beforeEach(() => {
   mockFindStepsByWorkflowId.mockReset();
   mockFindEdgesByWorkflowId.mockReset();
   mockUpdateEnrollment.mockReset();
+  mockInsertCommunicationLog.mockReset();
 });
 
-// ── walkStep tests (via processEnrollment) ───────────────────────────
+// ── send ─────────────────────────────────────────────────────────────
 
-describe("walkStep — send", () => {
-  it("continues to next step when outgoing edge exists", async () => {
-    const steps = [
-      makeStep("step-1", "filter", { attribute_key: 'is_insured', compare_value: 'true', operator: '=' }),
-      makeStep("step-2", "send", { title: "You are insured congrats", body: "Done" }),
-    ];
-    
-    const edges = [makeEdge("step-1", "step-2")];
-
-    setupGraph(steps, edges, { is_insured: "true" });
-
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
-
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
+describe("send step", () => {
+  it("completes when send is the last step in the workflow", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "Your order shipped", body: "Track it here" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [],
     });
-  });
 
-  it("completes when send has no outgoing edge", async () => {
-    const steps = [makeStep("step-1", "send", { title: "Hi", body: "Bye" })];
-    const edges: StepEdge[] = [];
+    await processEnrollment(enrollment);
 
-    setupGraph(steps, edges);
-
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
+    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
+      enrollmentId: "enr-1",
+      stepId: "step-1",
+      userId: "user-1",
+      config: { title: "Your order shipped", body: "Track it here" },
+    });
 
     expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
       currentStepId: null,
@@ -134,25 +103,54 @@ describe("walkStep — send", () => {
   });
 });
 
-describe("walkStep — branch", () => {
-  it.only("follows true branch when condition matches (= operator)", async () => {
-    const steps = [
-      makeStep("step-1", "branch", {
-        user_column: "plan",
-        operator: "=",
-        compare_value: "pro",
-      }),
-      makeStep("step-true", "send", { title: "Pro!", body: "Welcome pro" }),
-      makeStep("step-false", "send", { title: "Free", body: "Upgrade?" }),
-    ];
-    const edges = [
-      makeEdge("step-1", "step-true", true),
-      makeEdge("step-1", "step-false", false),
-    ];
+// ── branch ───────────────────────────────────────────────────────────
 
-    setupGraph(steps, edges, { plan: "pro" });
+describe("branch step", () => {
+  it("follows true edge when user plan = pro", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "branch",
+          config: { user_column: "plan", operator: "=", compare_value: "pro" },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "Welcome to Pro!", body: "Enjoy your benefits" },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-3",
+          workflowId: "wf-1",
+          type: "exit",
+          config: {},
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: true,
+        },
+        {
+          id: "edge-2",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-3",
+          handle: false,
+        },
+      ],
+      userAttributes: { plan: "pro" },
+    });
 
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
+    await processEnrollment(enrollment);
 
     expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
       currentStepId: null,
@@ -160,51 +158,107 @@ describe("walkStep — branch", () => {
       status: "completed",
     });
 
-    const calls = mockUpdateEnrollment.mock.calls;
-    const statuses = calls.map((c: any) => c[1].status);
-    expect(statuses).not.toContain("exited");
+    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
+      enrollmentId: "enr-1",
+      stepId: "step-2",
+      userId: "user-1",
+      config: { title: "Welcome to Pro!", body: "Enjoy your benefits" },
+    });
   });
 
-  it("follows false branch when condition does not match", async () => {
-    const steps = [
-      makeStep("step-1", "branch", {
-        user_column: "plan",
-        operator: "=",
-        compare_value: "pro",
-      }),
-      makeStep("step-true", "send", { title: "Pro!", body: "Welcome pro" }),
-      makeStep("step-false", "send", { title: "Free", body: "Upgrade?" }),
-    ];
-    const edges = [
-      makeEdge("step-1", "step-true", true),
-      makeEdge("step-1", "step-false", false),
-    ];
+  it("follows false edge when user plan does not match", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "branch",
+          config: { user_column: "plan", operator: "=", compare_value: "pro" },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "exit",
+          config: {},
+          createdAt: new Date(),
+        },
+        {
+          id: "step-3",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "Upgrade to Pro", body: "Get more" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: true,
+        },
+        {
+          id: "edge-2",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-3",
+          handle: false,
+        },
+      ],
+      userAttributes: { plan: "free" },
+    });
 
-    setupGraph(steps, edges, { plan: "free" });
-
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
+    await processEnrollment(enrollment);
 
     expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
       currentStepId: null,
       processAt: null,
       status: "completed",
     });
+
+    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
+      enrollmentId: "enr-1",
+      stepId: "step-3",
+      userId: "user-1",
+      config: { title: "Upgrade to Pro", body: "Get more" },
+    });
   });
 
-  it("exits when attribute key is missing from user", async () => {
-    const steps = [
-      makeStep("step-1", "branch", {
-        user_column: "plan",
-        operator: "=",
-        compare_value: "pro",
-      }),
-      makeStep("step-true", "send", { title: "Pro!", body: "body" }),
-    ];
-    const edges = [makeEdge("step-1", "step-true", true)];
+  it("exits when the branched attribute does not exist on the user", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "branch",
+          config: { user_column: "plan", operator: "=", compare_value: "pro" },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "Pro!", body: "body" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: true,
+        },
+      ],
+      userAttributes: {},
+    });
 
-    setupGraph(steps, edges, {});
+    await processEnrollment(enrollment);
 
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
+    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
 
     expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
       currentStepId: null,
@@ -213,25 +267,105 @@ describe("walkStep — branch", () => {
     });
   });
 
-  it("handles != operator correctly", async () => {
-    const steps = [
-      makeStep("step-1", "branch", {
-        user_column: "plan",
-        operator: "!=",
-        compare_value: "pro",
-      }),
-      makeStep("step-true", "send", { title: "Not pro", body: "body" }),
-      makeStep("step-false", "send", { title: "Is pro", body: "body" }),
-    ];
-    const edges = [
-      makeEdge("step-1", "step-true", true),
-      makeEdge("step-1", "step-false", false),
-    ];
+  it("follows true edge with != operator (plan is free, != pro)", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "branch",
+          config: { user_column: "plan", operator: "!=", compare_value: "pro" },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "Not a pro user", body: "body" },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-3",
+          workflowId: "wf-1",
+          type: "exit",
+          config: {},
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: true,
+        },
+        {
+          id: "edge-2",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-3",
+          handle: false,
+        },
+      ],
+      userAttributes: { plan: "free" },
+    });
 
-    // plan is "free" which != "pro" → true branch
-    setupGraph(steps, edges, { plan: "free" });
+    await processEnrollment(enrollment);
 
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
+    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
+      enrollmentId: "enr-1",
+      stepId: "step-2",
+      userId: "user-1",
+      config: { title: "Not a pro user", body: "body" },
+    });
+
+    // Took the true branch (send) → completed, not the false branch (exit)
+    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
+      currentStepId: null,
+      processAt: null,
+      status: "completed",
+    });
+  });
+
+  it("follows true edge with exists operator when key is present", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "branch",
+          config: { user_column: "plan", operator: "exists" },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "Has a plan", body: "body" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: true,
+        },
+      ],
+      userAttributes: { plan: "pro" },
+    });
+
+    await processEnrollment(enrollment);
+
+    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
+      enrollmentId: "enr-1",
+      stepId: "step-2",
+      userId: "user-1",
+      config: { title: "Has a plan", body: "body" },
+    });
 
     expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
       currentStepId: null,
@@ -240,19 +374,109 @@ describe("walkStep — branch", () => {
     });
   });
 
-  it("handles exists operator — key present → true branch", async () => {
-    const steps = [
-      makeStep("step-1", "branch", {
-        user_column: "plan",
-        operator: "exists",
-      }),
-      makeStep("step-true", "send", { title: "Has plan", body: "body" }),
-    ];
-    const edges = [makeEdge("step-1", "step-true", true)];
+  it("follows false edge with not_exists operator when key is present", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "branch",
+          config: { user_column: "plan", operator: "not_exists" },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "exit",
+          config: {},
+          createdAt: new Date(),
+        },
+        {
+          id: "step-3",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "Has plan", body: "body" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: true,
+        },
+        {
+          id: "edge-2",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-3",
+          handle: false,
+        },
+      ],
+      userAttributes: { plan: "pro" },
+    });
 
-    setupGraph(steps, edges, { plan: "anything" });
+    await processEnrollment(enrollment);
 
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
+    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
+      enrollmentId: "enr-1",
+      stepId: "step-3",
+      userId: "user-1",
+      config: { title: "Has plan", body: "body" },
+    });
+
+    // Took the false branch (send) → completed, not the true branch (exit)
+    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
+      currentStepId: null,
+      processAt: null,
+      status: "completed",
+    });
+  });
+});
+
+// ── filter ───────────────────────────────────────────────────────────
+
+describe("filter step", () => {
+  it("continues to send when country = UK", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "filter",
+          config: { attribute_key: "country", operator: "=", compare_value: "UK" },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "UK offer", body: "body" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: null,
+        },
+      ],
+      userAttributes: { country: "UK" },
+    });
+
+    await processEnrollment(enrollment);
+
+    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
+      enrollmentId: "enr-1",
+      stepId: "step-2",
+      userId: "user-1",
+      config: { title: "UK offer", body: "body" },
+    });
 
     expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
       currentStepId: null,
@@ -261,24 +485,213 @@ describe("walkStep — branch", () => {
     });
   });
 
-  it("handles not_exists operator — key present → false branch", async () => {
-    const steps = [
-      makeStep("step-1", "branch", {
-        user_column: "plan",
-        operator: "not_exists",
-      }),
-      makeStep("step-true", "send", { title: "No plan", body: "body" }),
-      makeStep("step-false", "send", { title: "Has plan", body: "body" }),
-    ];
-    const edges = [
-      makeEdge("step-1", "step-true", true),
-      makeEdge("step-1", "step-false", false),
-    ];
+  it("exits when country does not match filter", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "filter",
+          config: { attribute_key: "country", operator: "=", compare_value: "UK" },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "UK offer", body: "body" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: null,
+        },
+      ],
+      userAttributes: { country: "US" },
+    });
 
-    // User HAS the "plan" key → not_exists is false → false branch
-    setupGraph(steps, edges, { plan: "pro" });
+    await processEnrollment(enrollment);
 
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
+    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
+
+    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
+      currentStepId: null,
+      processAt: null,
+      status: "exited",
+    });
+  });
+
+  it("exits when the filtered attribute does not exist on the user", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "filter",
+          config: { attribute_key: "country", operator: "=", compare_value: "UK" },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "UK offer", body: "body" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: null,
+        },
+      ],
+      userAttributes: {},
+    });
+
+    await processEnrollment(enrollment);
+
+    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
+
+    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
+      currentStepId: null,
+      processAt: null,
+      status: "exited",
+    });
+  });
+
+  it("continues when age > 18", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "filter",
+          config: { attribute_key: "age", operator: ">", compare_value: 18 },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "Adult content", body: "body" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: null,
+        },
+      ],
+      userAttributes: { age: 25 },
+    });
+
+    await processEnrollment(enrollment);
+
+    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
+      enrollmentId: "enr-1",
+      stepId: "step-2",
+      userId: "user-1",
+      config: { title: "Adult content", body: "body" },
+    });
+
+    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
+      currentStepId: null,
+      processAt: null,
+      status: "completed",
+    });
+  });
+
+  it("exits when age is not < 18", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "filter",
+          config: { attribute_key: "age", operator: "<", compare_value: 18 },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "Minor content", body: "body" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: null,
+        },
+      ],
+      userAttributes: { age: 25 },
+    });
+
+    await processEnrollment(enrollment);
+
+    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
+
+    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
+      currentStepId: null,
+      processAt: null,
+      status: "exited",
+    });
+  });
+
+  it("continues when country != UK", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "filter",
+          config: { attribute_key: "country", operator: "!=", compare_value: "UK" },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "Non-UK offer", body: "body" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: null,
+        },
+      ],
+      userAttributes: { country: "US" },
+    });
+
+    await processEnrollment(enrollment);
+
+    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
+      enrollmentId: "enr-1",
+      stepId: "step-2",
+      userId: "user-1",
+      config: { title: "Non-UK offer", body: "body" },
+    });
 
     expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
       currentStepId: null,
@@ -288,172 +701,70 @@ describe("walkStep — branch", () => {
   });
 });
 
-describe("walkStep — filter", () => {
-  it("continues when = filter passes", async () => {
-    const steps = [
-      makeStep("step-1", "filter", {
-        attribute_key: "country",
-        operator: "=",
-        compare_value: "UK",
-      }),
-      makeStep("step-2", "send", { title: "UK user", body: "body" }),
-    ];
-    const edges = [makeEdge("step-1", "step-2")];
+// ── wait ─────────────────────────────────────────────────────────────
 
-    setupGraph(steps, edges, { country: "UK" });
-
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
-
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
+describe("wait step", () => {
+  it("pauses enrollment and schedules next step 24 hours from now", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "wait",
+          config: { hours: 24 },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "Follow up", body: "body" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: null,
+        },
+      ],
     });
-  });
-
-  it("exits when = filter fails", async () => {
-    const steps = [
-      makeStep("step-1", "filter", {
-        attribute_key: "country",
-        operator: "=",
-        compare_value: "UK",
-      }),
-      makeStep("step-2", "send", { title: "UK user", body: "body" }),
-    ];
-    const edges = [makeEdge("step-1", "step-2")];
-
-    setupGraph(steps, edges, { country: "US" });
-
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
-
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "exited",
-    });
-  });
-
-  it("exits when attribute key is missing", async () => {
-    const steps = [
-      makeStep("step-1", "filter", {
-        attribute_key: "country",
-        operator: "=",
-        compare_value: "UK",
-      }),
-      makeStep("step-2", "send", { title: "UK user", body: "body" }),
-    ];
-    const edges = [makeEdge("step-1", "step-2")];
-
-    setupGraph(steps, edges, {});
-
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
-
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "exited",
-    });
-  });
-
-  it("handles > numeric comparison", async () => {
-    const steps = [
-      makeStep("step-1", "filter", {
-        attribute_key: "age",
-        operator: ">",
-        compare_value: 18,
-      }),
-      makeStep("step-2", "send", { title: "Adult", body: "body" }),
-    ];
-    const edges = [makeEdge("step-1", "step-2")];
-
-    setupGraph(steps, edges, { age: 25 });
-
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
-
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
-    });
-  });
-
-  it("handles < numeric comparison — exits when condition fails", async () => {
-    const steps = [
-      makeStep("step-1", "filter", {
-        attribute_key: "age",
-        operator: "<",
-        compare_value: 18,
-      }),
-      makeStep("step-2", "send", { title: "Minor", body: "body" }),
-    ];
-    const edges = [makeEdge("step-1", "step-2")];
-
-    setupGraph(steps, edges, { age: 25 });
-
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
-
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "exited",
-    });
-  });
-
-  it("handles != filter", async () => {
-    const steps = [
-      makeStep("step-1", "filter", {
-        attribute_key: "country",
-        operator: "!=",
-        compare_value: "UK",
-      }),
-      makeStep("step-2", "send", { title: "Non-UK", body: "body" }),
-    ];
-    const edges = [makeEdge("step-1", "step-2")];
-
-    setupGraph(steps, edges, { country: "US" });
-
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
-
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
-    });
-  });
-});
-
-describe("walkStep — wait", () => {
-  it("pauses with future processAt when outgoing edge exists", async () => {
-    const steps = [
-      makeStep("step-1", "wait", { hours: 24 }),
-      makeStep("step-2", "send", { title: "After wait", body: "body" }),
-    ];
-    const edges = [makeEdge("step-1", "step-2")];
-
-    setupGraph(steps, edges);
 
     const before = new Date();
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
+    await processEnrollment(enrollment);
 
     expect(mockUpdateEnrollment).toHaveBeenCalledTimes(1);
     const call = mockUpdateEnrollment.mock.calls[0];
     expect(call[1].status).toBe("active");
     expect(call[1].currentStepId).toBe("step-2");
-    // processAt should be ~24 hours from now
     const processAt = call[1].processAt as Date;
-    const hoursFromNow =
-      (processAt.getTime() - before.getTime()) / (1000 * 60 * 60);
+    const hoursFromNow = (processAt.getTime() - before.getTime()) / (1000 * 60 * 60);
     expect(hoursFromNow).toBeGreaterThan(23.9);
     expect(hoursFromNow).toBeLessThan(24.1);
+
+    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
   });
 
-  it("completes when wait has no outgoing edge", async () => {
-    const steps = [makeStep("step-1", "wait", { hours: 24 })];
-    const edges: StepEdge[] = [];
+  it("completes when wait is the last step in the workflow", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "wait",
+          config: { hours: 24 },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [],
+    });
 
-    setupGraph(steps, edges);
+    await processEnrollment(enrollment);
 
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
+    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
 
     expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
       currentStepId: null,
@@ -463,14 +774,26 @@ describe("walkStep — wait", () => {
   });
 });
 
-describe("walkStep — exit", () => {
+// ── exit ─────────────────────────────────────────────────────────────
+
+describe("exit step", () => {
   it("exits the enrollment immediately", async () => {
-    const steps = [makeStep("step-1", "exit", {})];
-    const edges: StepEdge[] = [];
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "exit",
+          config: {},
+          createdAt: new Date(),
+        },
+      ],
+      edges: [],
+    });
 
-    setupGraph(steps, edges);
+    await processEnrollment(enrollment);
 
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
+    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
 
     expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
       currentStepId: null,
@@ -480,21 +803,48 @@ describe("walkStep — exit", () => {
   });
 });
 
-// ── processEnrollment multi-step workflows ───────────────────────────
+// ── multi-step workflows ─────────────────────────────────────────────
 
-describe("processEnrollment", () => {
-  it("walks linear send → send → end and completes", async () => {
-    const steps = [
-      makeStep("step-1", "send", { title: "First", body: "body" }),
-      makeStep("step-2", "send", { title: "Second", body: "body" }),
-    ];
-    const edges = [makeEdge("step-1", "step-2")];
+describe("multi-step workflows", () => {
+  it("filter → send: filters insured users then sends notification", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "filter",
+          config: { attribute_key: "is_insured", operator: "=", compare_value: "true" },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "You are insured", body: "Congrats" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: null,
+        },
+      ],
+      userAttributes: { is_insured: "true" },
+    });
 
-    setupGraph(steps, edges);
+    await processEnrollment(enrollment);
 
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
+    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
+      enrollmentId: "enr-1",
+      stepId: "step-2",
+      userId: "user-1",
+      config: { title: "You are insured", body: "Congrats" },
+    });
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledTimes(1);
     expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
       currentStepId: null,
       processAt: null,
@@ -502,41 +852,59 @@ describe("processEnrollment", () => {
     });
   });
 
-  it("walks filter → send when filter passes", async () => {
-    const steps = [
-      makeStep("step-1", "filter", {
-        attribute_key: "plan",
-        operator: "=",
-        compare_value: "pro",
-      }),
-      makeStep("step-2", "send", { title: "Pro msg", body: "body" }),
-    ];
-    const edges = [makeEdge("step-1", "step-2")];
-
-    setupGraph(steps, edges, { plan: "pro" });
-
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
-
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
+  it("send → wait → send: sends welcome, waits 12h, then sends follow-up", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-1",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "Welcome!", body: "Thanks for signing up" },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-2",
+          workflowId: "wf-1",
+          type: "wait",
+          config: { hours: 12 },
+          createdAt: new Date(),
+        },
+        {
+          id: "step-3",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "How are you finding things?", body: "Let us know" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [
+        {
+          id: "edge-1",
+          workflowId: "wf-1",
+          source: "step-1",
+          target: "step-2",
+          handle: null,
+        },
+        {
+          id: "edge-2",
+          workflowId: "wf-1",
+          source: "step-2",
+          target: "step-3",
+          handle: null,
+        },
+      ],
     });
-  });
 
-  it("walks send → wait → send and pauses at wait", async () => {
-    const steps = [
-      makeStep("step-1", "send", { title: "First", body: "body" }),
-      makeStep("step-2", "wait", { hours: 12 }),
-      makeStep("step-3", "send", { title: "After wait", body: "body" }),
-    ];
-    const edges = [makeEdge("step-1", "step-2"), makeEdge("step-2", "step-3")];
+    await processEnrollment(enrollment);
 
-    setupGraph(steps, edges);
+    expect(mockInsertCommunicationLog).toHaveBeenCalledTimes(1);
+    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
+      enrollmentId: "enr-1",
+      stepId: "step-1",
+      userId: "user-1",
+      config: { title: "Welcome!", body: "Thanks for signing up" },
+    });
 
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
-
-    // Should pause at the wait step, not complete
     expect(mockUpdateEnrollment).toHaveBeenCalledTimes(1);
     const call = mockUpdateEnrollment.mock.calls[0];
     expect(call[1].status).toBe("active");
@@ -549,20 +917,29 @@ describe("processEnrollment", () => {
     mockFindStepsByWorkflowId.mockResolvedValue([]);
     mockFindEdgesByWorkflowId.mockResolvedValue([]);
 
-    await processEnrollment(makeEnrollment({ currentStepId: "step-1" }));
+    await processEnrollment(enrollment);
 
+    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
     expect(mockUpdateEnrollment).not.toHaveBeenCalled();
   });
 
-  it("completes when currentStepId points to nonexistent step", async () => {
-    setupGraph(
-      [makeStep("step-99", "send", { title: "X", body: "X" })],
-      []
-    );
+  it("completes when currentStepId points to a step that no longer exists", async () => {
+    setupMocks({
+      steps: [
+        {
+          id: "step-99",
+          workflowId: "wf-1",
+          type: "send",
+          config: { title: "X", body: "X" },
+          createdAt: new Date(),
+        },
+      ],
+      edges: [],
+    });
 
-    await processEnrollment(
-      makeEnrollment({ currentStepId: "step-missing" })
-    );
+    await processEnrollment({ ...enrollment, currentStepId: "step-deleted" });
+
+    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
 
     expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
       currentStepId: null,
@@ -572,10 +949,10 @@ describe("processEnrollment", () => {
   });
 });
 
-// ── processReadyEnrollments orchestration ────────────────────────────
+// ── processReadyEnrollments ──────────────────────────────────────────
 
 describe("processReadyEnrollments", () => {
-  it("returns zeros when no ready enrollments", async () => {
+  it("returns zeros when no enrollments are ready", async () => {
     mockFindReadyEnrollments.mockResolvedValue([]);
 
     const result = await processReadyEnrollments();
@@ -583,18 +960,30 @@ describe("processReadyEnrollments", () => {
     expect(result).toEqual({ processed: 0, failed: 0, results: [] });
   });
 
-  it("processes multiple enrollments and locks each to processing", async () => {
-    const enrollments = [
-      makeEnrollment({ id: "enr-1", currentStepId: "step-1" }),
-      makeEnrollment({ id: "enr-2", currentStepId: "step-1" }),
-    ];
-    mockFindReadyEnrollments.mockResolvedValue(enrollments);
+  it("locks each enrollment to processing before walking it", async () => {
+    mockFindReadyEnrollments.mockResolvedValue([
+      { ...enrollment, id: "enr-1" },
+      { ...enrollment, id: "enr-2" },
+    ]);
     mockUpdateEnrollment.mockResolvedValue({});
-
-    // Both enrollments will process the same simple workflow
-    const steps = [makeStep("step-1", "send", { title: "Hi", body: "body" })];
-    mockFindUserById.mockResolvedValue(makeUser());
-    mockFindStepsByWorkflowId.mockResolvedValue(steps);
+    mockFindUserById.mockResolvedValue({
+      id: "user-1",
+      customerId: "cust-1",
+      externalId: "ext-1",
+      phone: null,
+      gender: null,
+      attributes: {},
+      createdAt: new Date(),
+    });
+    mockFindStepsByWorkflowId.mockResolvedValue([
+      {
+        id: "step-1",
+        workflowId: "wf-1",
+        type: "send",
+        config: { title: "Hi", body: "body" },
+        createdAt: new Date(),
+      },
+    ]);
     mockFindEdgesByWorkflowId.mockResolvedValue([]);
 
     const result = await processReadyEnrollments();
@@ -602,7 +991,6 @@ describe("processReadyEnrollments", () => {
     expect(result.processed).toBe(2);
     expect(result.failed).toBe(0);
 
-    // Verify both were locked to "processing"
     const lockCalls = mockUpdateEnrollment.mock.calls.filter(
       (c: any) => c[1].status === "processing"
     );
