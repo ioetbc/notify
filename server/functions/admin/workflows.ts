@@ -33,6 +33,11 @@ const workflows = new Hono()
       return c.json({ workflow }, 200);
     }
   )
+  .patch("/:id/publish", async (c) => {
+    const result = await service.publishWorkflow(c.req.param("id"));
+    if (!result) return c.json({ error: "Workflow not found" }, 404);
+    return c.json({ workflow: result }, 200);
+  })
   .put(
     "/:id",
     zValidator("json", updateWorkflowSchema),

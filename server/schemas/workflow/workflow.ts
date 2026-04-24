@@ -50,19 +50,34 @@ export const canvasStepSchema = z.discriminatedUnion("type", [
 export const canvasEdgeSchema = z.object({
   source: z.string(),
   target: z.string(),
-  handle: z.string().optional(),
+  handle: z.boolean().optional(),
 });
 
-export const createWorkflowSchema = z.object({
-  name: z.string(),
-  trigger_event: z.string().min(1),
-  steps: z.array(canvasStepSchema),
-  edges: z.array(canvasEdgeSchema),
-});
+export const systemEvents = ["user_created", "user_updated"] as const;
 
-export const updateWorkflowSchema = z.object({
-  name: z.string(),
-  trigger_event: z.string().min(1),
-  steps: z.array(canvasStepSchema),
-  edges: z.array(canvasEdgeSchema),
-});
+export const triggerSchema = z.discriminatedUnion("trigger_type", [
+  z.object({
+    trigger_type: z.literal("system"),
+    trigger_event: z.enum(systemEvents),
+  }),
+  z.object({
+    trigger_type: z.literal("custom"),
+    trigger_event: z.string().min(1),
+  }),
+]);
+
+export const createWorkflowSchema = z
+  .object({
+    name: z.string(),
+    steps: z.array(canvasStepSchema),
+    edges: z.array(canvasEdgeSchema),
+  })
+  .and(triggerSchema);
+
+export const updateWorkflowSchema = z
+  .object({
+    name: z.string(),
+    steps: z.array(canvasStepSchema),
+    edges: z.array(canvasEdgeSchema),
+  })
+  .and(triggerSchema);

@@ -1,6 +1,7 @@
 import { type Edge, type Node, MarkerType } from '@xyflow/react';
 import type {
   StepType,
+  TriggerType,
   TriggerEvent,
   StepNodeData,
   TriggerNodeData,
@@ -12,7 +13,8 @@ import type {
 } from './types';
 import { getLayoutedElements } from './layout';
 
-export const TRIGGER_EVENTS: TriggerEvent[] = ['contact_added', 'contact_updated', 'event_received'];
+export const SYSTEM_EVENTS = ['user_created', 'user_updated'] as const;
+export const TRIGGER_TYPES = ['system', 'custom'] as const;
 
 export type CanvasNode = Node<StepNodeData, StepType>;
 
@@ -33,7 +35,7 @@ export function createNodeData(type: StepType): StepNodeData {
     case 'trigger':
       return {
         type: 'trigger',
-        config: { event: 'contact_added' },
+        config: { triggerType: 'system' as TriggerType, event: 'user_created' },
         label: 'Trigger',
       } as TriggerNodeData;
     case 'wait':
@@ -77,11 +79,11 @@ export interface ApiEdge {
   id: string;
   source: string;
   target: string;
-  handle: string | null;
+  handle: boolean | null;
 }
 
 export function dbToCanvas(
-  workflow: { id: string; name: string; triggerEvent: TriggerEvent },
+  workflow: { id: string; name: string; triggerType: TriggerType; triggerEvent: TriggerEvent },
   steps: ApiStep[],
   apiEdges: ApiEdge[]
 ): { nodes: CanvasNode[]; edges: Edge[] } {
@@ -94,7 +96,7 @@ export function dbToCanvas(
     position: { x: 0, y: 0 },
     data: {
       type: 'trigger' as const,
-      config: { event: workflow.triggerEvent },
+      config: { triggerType: workflow.triggerType, event: workflow.triggerEvent },
       label: 'Trigger',
     },
   });
@@ -112,12 +114,13 @@ export function dbToCanvas(
   const stepsWithIncoming = new Set<string>();
 
   for (const e of apiEdges) {
-    const label = e.handle === 'yes' ? 'Yes' : e.handle === 'no' ? 'No' : undefined;
+    const sourceHandle = e.handle === true ? 'yes' : e.handle === false ? 'no' : undefined;
+    const label = e.handle === true ? 'Yes' : e.handle === false ? 'No' : undefined;
     edges.push({
       id: e.id,
       source: e.source,
       target: e.target,
-      sourceHandle: e.handle ?? undefined,
+      sourceHandle,
       animated: true,
       markerEnd: { type: MarkerType.ArrowClosed },
       ...(label && { label }),

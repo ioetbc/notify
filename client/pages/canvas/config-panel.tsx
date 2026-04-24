@@ -1,4 +1,5 @@
 import type {
+  TriggerType,
   TriggerEvent,
   TriggerNodeData,
   WaitNodeData,
@@ -7,16 +8,17 @@ import type {
   FilterNodeData,
 } from './types';
 import type { CanvasNode, UserColumn } from './utils';
-import { formatTriggerEvent, TRIGGER_EVENTS } from './utils';
+import { formatTriggerEvent, SYSTEM_EVENTS } from './utils';
 
 interface ConfigPanelProps {
   node: CanvasNode;
   onUpdate: (config: TriggerNodeData['config'] | WaitNodeData['config'] | BranchNodeData['config'] | SendNodeData['config'] | FilterNodeData['config']) => void;
   onClose: () => void;
   userColumns: UserColumn[];
+  eventNames: string[];
 }
 
-export function ConfigPanel({ node, onUpdate, onClose, userColumns }: ConfigPanelProps) {
+export function ConfigPanel({ node, onUpdate, onClose, userColumns, eventNames }: ConfigPanelProps) {
   const data = node.data;
 
   return (
@@ -32,7 +34,7 @@ export function ConfigPanel({ node, onUpdate, onClose, userColumns }: ConfigPane
       </div>
 
       {data.type === 'trigger' && (
-        <TriggerConfig config={data.config} onUpdate={onUpdate} />
+        <TriggerConfig config={data.config} onUpdate={onUpdate} eventNames={eventNames} />
       )}
       {data.type === 'wait' && (
         <WaitConfig config={data.config} onUpdate={onUpdate} />
@@ -53,26 +55,69 @@ export function ConfigPanel({ node, onUpdate, onClose, userColumns }: ConfigPane
 function TriggerConfig({
   config,
   onUpdate,
+  eventNames,
 }: {
   config: TriggerNodeData['config'];
   onUpdate: (config: TriggerNodeData['config']) => void;
+  eventNames: string[];
 }) {
   return (
-    <div>
-      <label className="block text-sm text-gray-700 mb-1">Trigger Event</label>
-      <select
-        value={config.event}
-        onChange={(e) => onUpdate({ event: e.target.value as TriggerEvent })}
-        className="w-full border border-gray-300 rounded px-3 py-2"
-      >
-        {TRIGGER_EVENTS.map((event) => (
-          <option key={event} value={event}>
-            {formatTriggerEvent(event)}
-          </option>
-        ))}
-      </select>
-      <p className="text-xs text-gray-500 mt-2">
-        This workflow will start when this event occurs.
+    <div className="space-y-3">
+      <div>
+        <label className="block text-sm text-gray-700 mb-1">Trigger Type</label>
+        <select
+          value={config.triggerType}
+          onChange={(e) => {
+            const triggerType = e.target.value as TriggerType;
+            const event = triggerType === 'system'
+              ? SYSTEM_EVENTS[0]
+              : (eventNames[0] ?? '');
+            onUpdate({ triggerType, event });
+          }}
+          className="w-full border border-gray-300 rounded px-3 py-2"
+        >
+          <option value="system">System</option>
+          <option value="custom">Custom Event</option>
+        </select>
+      </div>
+
+      <div>
+        <label className="block text-sm text-gray-700 mb-1">Event</label>
+        {config.triggerType === 'system' ? (
+          <select
+            value={config.event}
+            onChange={(e) => onUpdate({ ...config, event: e.target.value as TriggerEvent })}
+            className="w-full border border-gray-300 rounded px-3 py-2"
+          >
+            {SYSTEM_EVENTS.map((event) => (
+              <option key={event} value={event}>
+                {formatTriggerEvent(event)}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <select
+            value={config.event}
+            onChange={(e) => onUpdate({ ...config, event: e.target.value as TriggerEvent })}
+            className="w-full border border-gray-300 rounded px-3 py-2"
+          >
+            {eventNames.length === 0 ? (
+              <option value="" disabled>No events tracked yet</option>
+            ) : (
+              eventNames.map((name) => (
+                <option key={name} value={name}>
+                  {formatTriggerEvent(name)}
+                </option>
+              ))
+            )}
+          </select>
+        )}
+      </div>
+
+      <p className="text-xs text-gray-500">
+        {config.triggerType === 'system'
+          ? 'This workflow will start when this system event occurs.'
+          : 'Select a custom event that your app has previously tracked.'}
       </p>
     </div>
   );

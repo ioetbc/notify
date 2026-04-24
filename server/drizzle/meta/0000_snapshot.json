@@ -1,78 +1,9 @@
 {
-  "id": "460861a2-c0ba-4df9-9ce4-0d732da80333",
+  "id": "9ae28153-f870-4dc1-b45d-bac9a763fb37",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "public.attribute_definition": {
-      "name": "attribute_definition",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "customer_id": {
-          "name": "customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "data_type": {
-          "name": "data_type",
-          "type": "attribute_type",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "attribute_definition_customer_id_customer_id_fk": {
-          "name": "attribute_definition_customer_id_customer_id_fk",
-          "tableFrom": "attribute_definition",
-          "tableTo": "customer",
-          "columnsFrom": [
-            "customer_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "attribute_definition_customer_id_name_unique": {
-          "name": "attribute_definition_customer_id_name_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "customer_id",
-            "name"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.customer": {
       "name": "customer",
       "schema": "",
@@ -315,7 +246,7 @@
         },
         "handle": {
           "name": "handle",
-          "type": "text",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": false
         }
@@ -404,6 +335,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "attributes": {
+          "name": "attributes",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -443,106 +381,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.user_attribute": {
-      "name": "user_attribute",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "attribute_definition_id": {
-          "name": "attribute_definition_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "text_value": {
-          "name": "text_value",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "boolean_value": {
-          "name": "boolean_value",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "number_value": {
-          "name": "number_value",
-          "type": "numeric",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "user_attribute_user_id_user_id_fk": {
-          "name": "user_attribute_user_id_user_id_fk",
-          "tableFrom": "user_attribute",
-          "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "user_attribute_attribute_definition_id_attribute_definition_id_fk": {
-          "name": "user_attribute_attribute_definition_id_attribute_definition_id_fk",
-          "tableFrom": "user_attribute",
-          "tableTo": "attribute_definition",
-          "columnsFrom": [
-            "attribute_definition_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "user_attribute_user_id_attribute_definition_id_unique": {
-          "name": "user_attribute_user_id_attribute_definition_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "user_id",
-            "attribute_definition_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.workflow": {
       "name": "workflow",
       "schema": "",
@@ -563,6 +401,13 @@
         "name": {
           "name": "name",
           "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trigger_type": {
+          "name": "trigger_type",
+          "type": "trigger_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -704,31 +549,13 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "workflow_enrollment_user_id_workflow_id_unique": {
-          "name": "workflow_enrollment_user_id_workflow_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "user_id",
-            "workflow_id"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
     }
   },
   "enums": {
-    "public.attribute_type": {
-      "name": "attribute_type",
-      "schema": "public",
-      "values": [
-        "text",
-        "boolean",
-        "number"
-      ]
-    },
     "public.enrollment_status": {
       "name": "enrollment_status",
       "schema": "public",
@@ -753,16 +580,16 @@
       "values": [
         "wait",
         "branch",
-        "send"
+        "send",
+        "filter"
       ]
     },
-    "public.trigger_event": {
-      "name": "trigger_event",
+    "public.trigger_type": {
+      "name": "trigger_type",
       "schema": "public",
       "values": [
-        "contact_added",
-        "contact_updated",
-        "event_received"
+        "system",
+        "custom"
       ]
     },
     "public.workflow_status": {

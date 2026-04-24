@@ -1,5 +1,47 @@
+import { addHours } from "date-fns";
 import * as repository from "../../repository/public";
+import * as workflowRepo from "../../repository/workflow";
 import type { Attributes } from "../../schemas/public";
+import type { WaitConfig } from "../../db/schema";
+
+export async function createUser(
+  customerId: string,
+  externalId: string,
+  phone?: string,
+  gender?: "male" | "female" | "other",
+  attributes?: Attributes
+) {
+  const existingUser = await repository.findUserByExternalId(
+    customerId,
+    externalId
+  );
+
+  if (existingUser) return null;
+
+  const created = await repository.createUser({
+    customerId,
+    externalId,
+    phone,
+    gender,
+    attributes: attributes ?? {},
+  });
+
+  const matchingWorkflows =
+    await repository.findActiveWorkflowsByTriggerEvent(customerId, "user_created");
+
+  for (const wf of matchingWorkflows) {
+    await enrollUser(created.id, wf.id);
+  }
+
+  return {
+    id: created.id,
+    external_id: created.externalId,
+    phone: created.phone,
+    gender: created.gender,
+    attributes: created.attributes,
+    created_at: created.createdAt!.toISOString(),
+  };
+}
 
 export async function updateUserAttributes(
   customerId: string,
@@ -18,12 +60,46 @@ export async function updateUserAttributes(
     attributes
   );
 
+  // Enroll in active workflows triggered by contact_updated
+  const matchingWorkflows =
+    await repository.findActiveWorkflowsByTriggerEvent(customerId, "user_updated");
+
+  for (const wf of matchingWorkflows) {
+    await enrollUser(foundUser.id, wf.id);
+  }
+
   return {
     id: updated.id,
     external_id: updated.externalId,
     attributes: updated.attributes,
     updated_at: new Date().toISOString(),
   };
+}
+
+export async function enrollUser(userId: string, workflowId: string) {
+  const steps = await workflowRepo.findStepsByWorkflowId(workflowId);
+  const edges = await workflowRepo.findEdgesByWorkflowId(workflowId);
+
+  // Find the step that has no incoming edges — this is the first real step
+  // (trigger node is not persisted as a step, so the root step is the one
+  // connected to the trigger via the first edge saved)
+  const stepsWithIncoming = new Set(edges.map((e) => e.target));
+  const firstStep = steps.find((s) => !stepsWithIncoming.has(s.id));
+
+  if (!firstStep) return null;
+
+  const now = new Date();
+  const processAt =
+    firstStep.type === "wait"
+      ? addHours(now, (firstStep.config as WaitConfig).hours)
+      : now;
+
+  return repository.createWorkflowEnrollment({
+    userId,
+    workflowId,
+    currentStepId: firstStep.id,
+    processAt,
+  });
 }
 
 export async function trackEvent(
@@ -37,6 +113,7 @@ export async function trackEvent(
     customerId,
     externalId
   );
+
   if (!foundUser) return null;
 
   const evt = await repository.createEvent({
@@ -51,11 +128,9 @@ export async function trackEvent(
     await repository.findActiveWorkflowsByTriggerEvent(customerId, eventName);
 
   let workflowsTriggered = 0;
+
   for (const wf of matchingWorkflows) {
-    const enrollment = await repository.createWorkflowEnrollment({
-      userId: foundUser.id,
-      workflowId: wf.id,
-    });
+    const enrollment = await enrollUser(foundUser.id, wf.id);
     if (enrollment) workflowsTriggered++;
   }
 

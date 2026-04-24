@@ -38,8 +38,9 @@ export async function createWorkflow(customerId: string, input: CreateWorkflowIn
   const workflow = await repository.createWorkflow({
     customerId,
     name: input.name,
+    triggerType: input.trigger_type,
     triggerEvent: input.trigger_event,
-    status: "active",
+    status: "draft",
   });
 
   await repository.insertSteps(toStepInputs(workflow.id, input.steps));
@@ -48,9 +49,14 @@ export async function createWorkflow(customerId: string, input: CreateWorkflowIn
   return workflow;
 }
 
+export async function publishWorkflow(workflowId: string) {
+  return repository.updateWorkflow(workflowId, { status: "active" });
+}
+
 export async function updateWorkflow(workflowId: string, input: UpdateWorkflowInput) {
   const updatedWorkflow = await repository.updateWorkflow(workflowId, {
     name: input.name,
+    triggerType: input.trigger_type,
     triggerEvent: input.trigger_event,
   });
 

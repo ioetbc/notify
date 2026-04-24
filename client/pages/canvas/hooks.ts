@@ -5,7 +5,7 @@ import { match } from 'ts-pattern';
 
 import { client, queryClient } from '../../lib/api';
 import type { CanvasStep } from '../../../server/services/workflow/workflow.types';
-import type { TriggerEvent } from './types';
+import type { TriggerEvent, TriggerType } from './types';
 import { dbToCanvas, type CanvasNode, type ApiStep, type ApiEdge, type UserColumn } from './utils';
 
 export function useUserColumns() {
@@ -19,9 +19,20 @@ export function useUserColumns() {
   });
 }
 
+export function useEventNames() {
+  return useQuery({
+    queryKey: ['event-names'],
+    queryFn: async () => {
+      const res = await client['event-names'].$get();
+      const data = await res.json();
+      return data.event_names as string[];
+    },
+  });
+}
+
 export function useWorkflow(
   workflowId: string | undefined,
-  onLoad: (name: string, nodes: CanvasNode[], edges: Edge[]) => void
+  onLoad: (name: string, nodes: CanvasNode[], edges: Edge[], status: string) => void
 ) {
   return useQuery({
     queryKey: ['workflow', workflowId],
@@ -31,17 +42,36 @@ export function useWorkflow(
       const data = await res.json();
       if ('error' in data) throw new Error(String(data.error));
       const { nodes, edges } = dbToCanvas(
-        data.workflow as { id: string; name: string; triggerEvent: TriggerEvent },
+        data.workflow as { id: string; name: string; triggerType: TriggerType; triggerEvent: TriggerEvent },
         data.steps as ApiStep[],
         (data as { edges: ApiEdge[] }).edges
       );
-      onLoad(data.workflow.name, nodes, edges);
+      onLoad(data.workflow.name, nodes, edges, data.workflow.status);
       return data;
     },
     enabled: !!workflowId,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+  });
+}
+
+export function usePublishWorkflow(workflowId: string | undefined) {
+  return useMutation({
+    mutationFn: async () => {
+      if (!workflowId) throw new Error('Cannot publish unsaved workflow');
+      const res = await client.workflows[':id'].publish.$patch({
+        param: { id: workflowId },
+      });
+      if (!res.ok) throw new Error(`Publish failed (${res.status})`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['workflow', workflowId] });
+    },
+    onError: (err) => {
+      alert(`Failed to publish: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    },
   });
 }
 
@@ -56,9 +86,12 @@ export function useSaveWorkflow(
   return useMutation({
     mutationFn: async () => {
       const triggerNode = nodes.find((n) => n.data.type === 'trigger');
+      const triggerType = (triggerNode?.data.type === 'trigger'
+        ? triggerNode.data.config.triggerType
+        : 'system') as TriggerType;
       const triggerEvent = (triggerNode?.data.type === 'trigger'
         ? triggerNode.data.config.event
-        : 'contact_added') as TriggerEvent;
+        : 'user_created') as TriggerEvent;
 
       const stepsPayload = nodes.flatMap((n) =>
         match(n.data)
@@ -79,7 +112,7 @@ export function useSaveWorkflow(
         .map((e) => ({
           source: e.source,
           target: e.target,
-          handle: e.sourceHandle ?? undefined,
+          handle: e.sourceHandle === 'yes' ? true : e.sourceHandle === 'no' ? false : undefined,
         }));
 
       if (workflowId) {
@@ -87,6 +120,7 @@ export function useSaveWorkflow(
           param: { id: workflowId },
           json: {
             name: workflowName,
+            trigger_type: triggerType,
             trigger_event: triggerEvent,
             steps: stepsPayload,
             edges: canvasEdges,
@@ -98,6 +132,7 @@ export function useSaveWorkflow(
         const res = await client.workflows.$post({
           json: {
             name: workflowName,
+            trigger_type: triggerType,
             trigger_event: triggerEvent,
             steps: stepsPayload,
             edges: canvasEdges,

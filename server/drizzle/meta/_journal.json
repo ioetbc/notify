@@ -5,22 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1776965026646,
-      "tag": "0000_simple_sunfire",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1776966484335,
-      "tag": "0001_shiny_molecule_man",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1776969135069,
-      "tag": "0002_last_starjammers",
+      "when": 1777028367962,
+      "tag": "0000_lyrical_vulcan",
       "breakpoints": true
     }
   ]

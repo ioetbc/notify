@@ -1,6 +1,6 @@
 import { eq, desc } from "drizzle-orm";
 import { db, workflow, step, stepEdge } from "../../db";
-import type { NewWorkflow } from "../../db";
+import type { NewWorkflow, Workflow } from "../../db";
 import type { StepInput, EdgeInput } from "./workflow.types";
 
 export async function findWorkflowById(workflowId: string) {
@@ -24,7 +24,7 @@ export async function createWorkflow(values: NewWorkflow) {
 
 export async function updateWorkflow(
   workflowId: string,
-  values: { name: string; triggerEvent: string }
+  values: Partial<Pick<Workflow, "name" | "triggerEvent" | "status">>
 ) {
   const [updated] = await db
     .update(workflow)

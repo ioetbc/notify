@@ -11,5 +11,5 @@ export type EdgeInput = {
   workflowId: string;
   source: string;
   target: string;
-  handle: string | null;
+  handle: boolean | null;
 };

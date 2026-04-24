@@ -3,6 +3,7 @@ import { handle } from "hono/aws-lambda";
 import { zValidator } from "@hono/zod-validator";
 import * as service from "../../services/public";
 import {
+  createUserSchema,
   updateUserAttributesSchema,
   trackEventSchema,
 } from "../../schemas/public";
@@ -14,11 +15,37 @@ function getCustomerId(c: { req: { header: (name: string) => string | undefined 
   return customerId;
 }
 
-function errorResponse(code: string, message: string, status: number) {
-  return { error: { code, message }, _status: status } as const;
-}
-
 const routes = app
+  .post(
+    "/v1/users",
+    zValidator("json", createUserSchema),
+    async (c) => {
+      const customerId = getCustomerId(c);
+      const { external_id, phone, gender, attributes } = c.req.valid("json");
+
+      const result = await service.createUser(
+        customerId,
+        external_id,
+        phone,
+        gender,
+        attributes
+      );
+
+      if (!result) {
+        return c.json(
+          {
+            error: {
+              code: "user_already_exists",
+              message: `A user with external_id '${external_id}' already exists`,
+            },
+          },
+          409
+        );
+      }
+
+      return c.json(result, 201);
+    }
+  )
   .patch(
     "/v1/users/:external_id",
     zValidator("json", updateUserAttributesSchema),

@@ -9,6 +9,13 @@ export const updateUserAttributesSchema = z.object({
   attributes: z.record(z.string(), attributeValue),
 });
 
+export const createUserSchema = z.object({
+  external_id: z.string().min(1),
+  phone: z.string().optional(),
+  gender: z.enum(["male", "female", "other"]).optional(),
+  attributes: z.record(z.string(), attributeValue).optional(),
+});
+
 const eventNameRegex = /^[a-z0-9_]+$/;
 
 export const trackEventSchema = z.object({

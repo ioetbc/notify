@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
-import { db, user } from "../../db";
+import { db, user, event } from "../../db";
 import { eq, sql } from "drizzle-orm";
 import { workflows } from "./workflows";
 const app = new Hono();
@@ -32,6 +32,18 @@ const routes = app
     }));
 
     return c.json({ columns }, 200);
+  })
+  .get("/event-names", async (c) => {
+    const customerId = getCustomerId(c);
+
+    const result = await db
+      .selectDistinct({ eventName: event.eventName })
+      .from(event)
+      .where(eq(event.customerId, customerId));
+
+    const eventNames = result.map((row) => row.eventName);
+
+    return c.json({ event_names: eventNames }, 200);
   });
 
 export type AppType = typeof routes;

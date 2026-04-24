@@ -12,11 +12,14 @@ export type { WaitConfig, BranchConfig, SendConfig, FilterConfig, StepConfig };
 
 // Enums matching server/database schema
 export type StepType = 'wait' | 'branch' | 'send' | 'filter' | 'trigger';
+export type TriggerType = "system" | "custom";
+export type SystemEvent = "user_created" | "user_updated";
 export type TriggerEvent = string;
 export type BranchOperator = '=' | '!=' | 'exists' | 'not_exists';
 
 // Step configurations
 export interface TriggerConfig {
+  triggerType: TriggerType;
   event: TriggerEvent;
 }
 

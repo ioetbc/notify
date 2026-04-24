@@ -26,7 +26,7 @@ import type {
 } from './types';
 import { createNodeData, getNodeId, type CanvasNode } from './utils';
 import { ConfigPanel } from './config-panel';
-import { useUserColumns, useWorkflow, useSaveWorkflow } from './hooks';
+import { useUserColumns, useEventNames, useWorkflow, useSaveWorkflow, usePublishWorkflow } from './hooks';
 
 function CanvasInner({ workflowId }: { workflowId?: string }) {
   const { screenToFlowPosition } = useReactFlow();
@@ -34,18 +34,22 @@ function CanvasInner({ workflowId }: { workflowId?: string }) {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [workflowName, setWorkflowName] = useState('Untitled Workflow');
+  const [workflowStatus, setWorkflowStatus] = useState<'draft' | 'active'>('draft');
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
 
   const { data: userColumns = [] } = useUserColumns();
+  const { data: eventNames = [] } = useEventNames();
 
-  useWorkflow(workflowId, (name, loadedNodes, loadedEdges) => {
+  useWorkflow(workflowId, (name, loadedNodes, loadedEdges, status) => {
     setWorkflowName(name);
     setNodes(loadedNodes);
     setEdges(loadedEdges);
+    setWorkflowStatus(status === 'active' ? 'active' : 'draft');
   });
 
   const saveMutation = useSaveWorkflow(workflowId, workflowName, nodes, edges);
+  const publishMutation = usePublishWorkflow(workflowId);
 
   const isValidConnection = useCallback(
     (connection: Connection | Edge) => {
@@ -166,13 +170,33 @@ function CanvasInner({ workflowId }: { workflowId?: string }) {
             value={workflowName}
             onChange={(e) => setWorkflowName(e.target.value)}
           />
-          <button
-            onClick={() => saveMutation.mutate()}
-            disabled={saveMutation.isPending}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {saveMutation.isPending ? 'Saving...' : 'Save'}
-          </button>
+          <div className="flex items-center gap-3">
+            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+              workflowStatus === 'active'
+                ? 'bg-green-100 text-green-800'
+                : 'bg-gray-100 text-gray-800'
+            }`}>
+              {workflowStatus === 'active' ? 'Active' : 'Draft'}
+            </span>
+            <button
+              onClick={() => saveMutation.mutate()}
+              disabled={saveMutation.isPending}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {saveMutation.isPending ? 'Saving...' : 'Save'}
+            </button>
+            {workflowId && workflowStatus !== 'active' && (
+              <button
+                onClick={() => publishMutation.mutate(undefined, {
+                  onSuccess: () => setWorkflowStatus('active'),
+                })}
+                disabled={publishMutation.isPending}
+                className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {publishMutation.isPending ? 'Publishing...' : 'Publish'}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Canvas */}
@@ -205,6 +229,7 @@ function CanvasInner({ workflowId }: { workflowId?: string }) {
               onUpdate={(config) => updateNodeData(selectedNode.id, config)}
               onClose={() => setSelectedNodeId(null)}
               userColumns={userColumns}
+              eventNames={eventNames}
             />
           )}
         </div>

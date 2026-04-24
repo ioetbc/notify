@@ -9,14 +9,15 @@ type WaitNode = Node<WaitNodeData, 'wait'>;
 type BranchNode = Node<BranchNodeData, 'branch'>;
 type SendNode = Node<SendNodeData, 'send'>;
 
-const triggerEventLabels: Record<string, string> = {
-  contact_added: 'Contact Added',
-  contact_updated: 'Contact Updated',
-  event_received: 'Event Received',
+const systemEventLabels: Record<string, string> = {
+  user_created: 'User Created',
+  user_updated: 'User Updated',
 };
 
 export function TriggerNode({ data, selected }: NodeProps<TriggerNode>) {
-  const eventLabel = triggerEventLabels[data.config.event] || data.config.event;
+  const eventLabel = data.config.triggerType === 'system'
+    ? (systemEventLabels[data.config.event] || data.config.event)
+    : data.config.event;
 
   return (
     <div

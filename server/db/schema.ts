@@ -7,16 +7,13 @@ import {
   pgEnum,
   unique,
   jsonb,
+  boolean,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 export const stepTypeEnum = pgEnum("step_type", ["wait", "branch", "send", "filter"]);
 
-export const triggerEventEnum = pgEnum("trigger_event", [
-  "contact_added",
-  "contact_updated",
-  "event_received",
-]);
+export const triggerTypeEnum = pgEnum("trigger_type", ["system", "custom"]);
 
 export const enrollmentStatusEnum = pgEnum("enrollment_status", [
   "active",
@@ -68,6 +65,7 @@ export const workflow = pgTable("workflow", {
     .notNull()
     .references(() => customer.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
+  triggerType: triggerTypeEnum("trigger_type").notNull(),
   triggerEvent: text("trigger_event").notNull(),
   status: workflowStatusEnum("status").default("draft").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
@@ -108,7 +106,7 @@ export const stepEdge = pgTable("step_edge", {
   target: uuid("target")
     .notNull()
     .references(() => step.id, { onDelete: "cascade" }),
-  handle: text("handle"),
+  handle: boolean("handle"),
 });
 
 export const workflowEnrollment = pgTable(
@@ -127,8 +125,7 @@ export const workflowEnrollment = pgTable(
     status: enrollmentStatusEnum("status").notNull().default("active"),
     processAt: timestamp("process_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
-  },
-  (table) => [unique().on(table.userId, table.workflowId)]
+  }
 );
 
 

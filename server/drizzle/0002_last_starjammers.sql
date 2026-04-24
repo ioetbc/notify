@@ -1,1 +1,0 @@
-ALTER TYPE "public"."step_type" ADD VALUE 'filter';

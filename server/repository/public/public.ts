@@ -18,6 +18,26 @@ export async function findUserByExternalId(
   });
 }
 
+export async function createUser(values: {
+  customerId: string;
+  externalId: string;
+  phone?: string;
+  gender?: "male" | "female" | "other";
+  attributes?: Record<string, string | number | boolean>;
+}) {
+  const [created] = await db
+    .insert(user)
+    .values({
+      customerId: values.customerId,
+      externalId: values.externalId,
+      phone: values.phone,
+      gender: values.gender,
+      attributes: values.attributes ?? {},
+    })
+    .returning();
+  return created;
+}
+
 export async function updateUserAttributes(
   userId: string,
   newAttributes: Attributes
@@ -61,13 +81,12 @@ export async function findActiveWorkflowsByTriggerEvent(
 export async function createWorkflowEnrollment(values: {
   userId: string;
   workflowId: string;
+  currentStepId: string;
+  processAt: Date;
 }) {
   const [created] = await db
     .insert(workflowEnrollment)
     .values(values)
-    .onConflictDoNothing({
-      target: [workflowEnrollment.userId, workflowEnrollment.workflowId],
-    })
     .returning();
   return created;
 }

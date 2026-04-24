@@ -9,19 +9,21 @@ export type CanvasStep =
 export type CanvasEdge = {
   source: string;
   target: string;
-  handle?: string;
+  handle?: boolean;
 };
+
+export type TriggerInput =
+  | { trigger_type: "system"; trigger_event: "user_created" | "user_updated" }
+  | { trigger_type: "custom"; trigger_event: string };
 
 export type CreateWorkflowInput = {
   name: string;
-  trigger_event: string;
   steps: CanvasStep[];
   edges: CanvasEdge[];
-};
+} & TriggerInput;
 
 export type UpdateWorkflowInput = {
   name: string;
-  trigger_event: string;
   steps: CanvasStep[];
   edges: CanvasEdge[];
-};
+} & TriggerInput;
