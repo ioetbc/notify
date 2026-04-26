@@ -63,7 +63,7 @@ All core tables are defined and migrated:
 
 ---
 
-### What Does NOT Exist Yet
+### What Does NOT Exist Yet 
 
 - **Step walker / execution engine** — enrollments are created with `current_step_id` and `process_at` but no processor exists to advance users through steps (no cron, no SQS queue, no worker Lambda)
 - **Actual notification delivery** — Send step stores title/body but nothing calls Expo's Push API
