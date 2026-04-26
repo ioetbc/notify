@@ -10,6 +10,7 @@ import {
   boolean,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+import { z } from "zod";
 
 export const stepTypeEnum = pgEnum("step_type", ["wait", "branch", "send", "filter", "exit"]);
 
@@ -72,19 +73,25 @@ export const workflow = pgTable("workflow", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
-export type WaitConfig = { hours: number };
-export type BranchConfig = {
-  user_column: string;
-  operator: "=" | "!=" | "exists" | "not_exists";
-  compare_value?: string;
-};
-export type SendConfig = { title: string; body: string };
-export type FilterConfig = {
-  attribute_key: string;
-  operator: "=" | "!=" | ">" | "<";
-  compare_value: string | number | boolean;
-};
-export type ExitConfig = Record<string, never>;
+export const WaitConfigSchema = z.object({ hours: z.number() });
+export const BranchConfigSchema = z.object({
+  user_column: z.string(),
+  operator: z.enum(["=", "!=", "exists", "not_exists"]),
+  compare_value: z.string().optional(),
+});
+export const SendConfigSchema = z.object({ title: z.string(), body: z.string() });
+export const FilterConfigSchema = z.object({
+  attribute_key: z.string(),
+  operator: z.enum(["=", "!=", ">", "<"]),
+  compare_value: z.union([z.string(), z.number(), z.boolean()]),
+});
+export const ExitConfigSchema = z.object({}).strict();
+
+export type WaitConfig = z.infer<typeof WaitConfigSchema>;
+export type BranchConfig = z.infer<typeof BranchConfigSchema>;
+export type SendConfig = z.infer<typeof SendConfigSchema>;
+export type FilterConfig = z.infer<typeof FilterConfigSchema>;
+export type ExitConfig = z.infer<typeof ExitConfigSchema>;
 export type StepConfig = WaitConfig | BranchConfig | SendConfig | FilterConfig | ExitConfig;
 
 export const step = pgTable("step", {

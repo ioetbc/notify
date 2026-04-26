@@ -15,6 +15,7 @@
     "db:reboot": "bun run db:reset && bun run db:generate && bun run db:migrate && bun run db:seed"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.4.4",
     "drizzle-kit": "^0.31.10",
     "esbuild": "^0.21.4",
     "npm-run-all2": "^6.2.0"

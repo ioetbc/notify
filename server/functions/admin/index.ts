@@ -3,7 +3,13 @@ import { handle } from "hono/aws-lambda";
 import { db, user, event } from "../../db";
 import { eq, sql } from "drizzle-orm";
 import { workflows } from "./workflows";
-import { processReadyEnrollments } from "../../services/enrollment";
+import { EnrollmentWalker } from "../../services/enrollment";
+
+const walker = new EnrollmentWalker({
+  db,
+  onSend: async () => {},
+});
+
 const app = new Hono();
 
 function getCustomerId(c: { req: { header: (name: string) => string | undefined } }) {
@@ -47,7 +53,7 @@ const routes = app
     return c.json({ event_names: eventNames }, 200);
   })
   .post("/enrollments/process", async (c) => {
-    const result = await processReadyEnrollments();
+    const result = await walker.processReadyEnrollments();
     return c.json(result, 200);
   });
 

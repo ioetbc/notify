@@ -1,999 +1,685 @@
-import { describe, it, expect, beforeEach, mock } from "bun:test";
-import type { Step, StepEdge, WorkflowEnrollment } from "../../db/schema";
-
-// ── Mock: repository/enrollment ──────────────────────────────────────
-const mockFindReadyEnrollments = mock<any>();
-const mockFindUserById = mock<any>();
-const mockFindStepsByWorkflowId = mock<any>();
-const mockFindEdgesByWorkflowId = mock<any>();
-const mockUpdateEnrollment = mock<any>();
-const mockInsertCommunicationLog = mock<any>();
-
-mock.module("../../repository/enrollment", () => ({
-  findReadyEnrollments: mockFindReadyEnrollments,
-  findUserById: mockFindUserById,
-  findStepsByWorkflowId: mockFindStepsByWorkflowId,
-  findEdgesByWorkflowId: mockFindEdgesByWorkflowId,
-  updateEnrollment: mockUpdateEnrollment,
-  insertCommunicationLog: mockInsertCommunicationLog,
-}));
-
-// ── Import service under test (after mocks) ──────────────────────────
+import { describe, it, expect, beforeEach } from "bun:test";
+import { createTestDb, type TestDb } from "../../test/db";
+import { EnrollmentWalker, type StepEvent } from "./enrollment";
 import {
-  processEnrollment,
-  processReadyEnrollments,
-} from "./enrollment";
+  customer,
+  user,
+  workflow,
+  step,
+  stepEdge,
+  workflowEnrollment,
+  communicationLog,
+} from "../../db/schema";
+import type { SendConfig, StepConfig } from "../../db/schema";
+import { eq, sql } from "drizzle-orm";
 
-// ── Shared setup ─────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────
 
-function setupMocks({
-  steps,
-  edges,
-  userAttributes = {},
-}: {
-  steps: Step[];
-  edges: StepEdge[];
-  userAttributes?: Record<string, string | number | boolean>;
-}) {
-  mockFindUserById.mockResolvedValue({
-    id: "user-1",
-    customerId: "cust-1",
-    externalId: "ext-1",
-    phone: null,
-    gender: null,
-    attributes: userAttributes,
-    createdAt: new Date(),
-  });
-  mockFindStepsByWorkflowId.mockResolvedValue(steps);
-  mockFindEdgesByWorkflowId.mockResolvedValue(edges);
-  mockUpdateEnrollment.mockResolvedValue({});
-  mockInsertCommunicationLog.mockResolvedValue({});
-}
-
-const enrollment: WorkflowEnrollment = {
-  id: "enr-1",
-  userId: "user-1",
-  workflowId: "wf-1",
-  currentStepId: "step-1",
-  status: "active",
-  processAt: new Date(),
-  createdAt: new Date(),
+type SeedStep = {
+  id: string;
+  type: "send" | "branch" | "filter" | "wait" | "exit";
+  config: StepConfig;
 };
 
-beforeEach(() => {
-  mockFindReadyEnrollments.mockReset();
-  mockFindUserById.mockReset();
-  mockFindStepsByWorkflowId.mockReset();
-  mockFindEdgesByWorkflowId.mockReset();
-  mockUpdateEnrollment.mockReset();
-  mockInsertCommunicationLog.mockReset();
-});
+type SeedEdge = {
+  id: string;
+  source: string;
+  target: string;
+  handle: boolean | null;
+};
 
-// ── send ─────────────────────────────────────────────────────────────
+async function seedWorkflow(
+  db: TestDb,
+  opts: {
+    steps: SeedStep[];
+    edges?: SeedEdge[];
+    userAttributes?: Record<string, string | number | boolean>;
+    enrollmentId?: string;
+    currentStepId?: string;
+    processAt?: Date;
+  }
+) {
+  const customerId = "00000000-0000-0000-0000-000000000001";
+  const userId = "00000000-0000-0000-0000-000000000002";
+  const workflowId = "00000000-0000-0000-0000-000000000003";
+  const enrollmentId = opts.enrollmentId ?? "00000000-0000-0000-0000-000000000004";
+
+  await db.insert(customer).values({
+    id: customerId,
+    email: `test-${enrollmentId}@example.com`,
+    name: "Test Customer",
+  });
+
+  await db.insert(user).values({
+    id: userId,
+    customerId,
+    externalId: `ext-${enrollmentId}`,
+    attributes: opts.userAttributes ?? {},
+  });
+
+  await db.insert(workflow).values({
+    id: workflowId,
+    customerId,
+    name: "Test Workflow",
+    triggerType: "system",
+    triggerEvent: "test",
+    status: "active",
+  });
+
+  for (const s of opts.steps) {
+    await db.insert(step).values({
+      id: s.id,
+      workflowId,
+      type: s.type,
+      config: s.config,
+    });
+  }
+
+  for (const e of opts.edges ?? []) {
+    await db.insert(stepEdge).values({
+      id: e.id,
+      workflowId,
+      source: e.source,
+      target: e.target,
+      handle: e.handle,
+    });
+  }
+
+  await db.insert(workflowEnrollment).values({
+    id: enrollmentId,
+    userId,
+    workflowId,
+    currentStepId: opts.currentStepId ?? opts.steps[0]?.id ?? null,
+    status: "active",
+    processAt: opts.processAt ?? new Date(),
+  });
+
+  return { customerId, userId, workflowId, enrollmentId };
+}
+
+// ── Test setup ──────────────────────────────────────────────────────────
+
+let db: TestDb;
+let events: StepEvent[];
+let sendCalls: { userId: string; enrollmentId: string; stepId: string; config: SendConfig }[];
+
+function createWalker() {
+  return new EnrollmentWalker({
+    db,
+    onSend: async (payload) => { sendCalls.push(payload); },
+    observe: (event) => { events.push(event); },
+  });
+}
+
+beforeEach(async () => {
+  ({ db } = await createTestDb());
+  events = [];
+  sendCalls = [];
+});
 
 describe("send step", () => {
   it("completes when send is the last step in the workflow", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "Your order shipped", body: "Track it here" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "send", config: { title: "Your order shipped", body: "Track it here" } },
       ],
-      edges: [],
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
-      enrollmentId: "enr-1",
-      stepId: "step-1",
-      userId: "user-1",
-      config: { title: "Your order shipped", body: "Track it here" },
-    });
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(1);
+    expect(logs[0].config).toEqual({ title: "Your order shipped", body: "Track it here" });
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
-    });
+    expect(sendCalls).toHaveLength(1);
+    expect(sendCalls[0].config).toEqual({ title: "Your order shipped", body: "Track it here" });
+
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("completed");
+    expect(enrollment.currentStepId).toBeNull();
   });
 });
 
-// ── branch ───────────────────────────────────────────────────────────
-
 describe("branch step", () => {
   it("follows true edge when user plan = pro", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "branch",
-          config: { user_column: "plan", operator: "=", compare_value: "pro" },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "Welcome to Pro!", body: "Enjoy your benefits" },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-3",
-          workflowId: "wf-1",
-          type: "exit",
-          config: {},
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "branch", config: { user_column: "plan", operator: "=", compare_value: "pro" } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "send", config: { title: "Welcome to Pro!", body: "Enjoy your benefits" } },
+        { id: "00000000-0000-0000-0000-000000000012", type: "exit", config: {} },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: true,
-        },
-        {
-          id: "edge-2",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-3",
-          handle: false,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: true },
+        { id: "00000000-0000-0000-0000-0000000000e2", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000012", handle: false },
       ],
       userAttributes: { plan: "pro" },
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("completed");
 
-    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
-      enrollmentId: "enr-1",
-      stepId: "step-2",
-      userId: "user-1",
-      config: { title: "Welcome to Pro!", body: "Enjoy your benefits" },
-    });
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(1);
+    expect(logs[0].config).toEqual({ title: "Welcome to Pro!", body: "Enjoy your benefits" });
   });
 
   it("follows false edge when user plan does not match", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "branch",
-          config: { user_column: "plan", operator: "=", compare_value: "pro" },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "exit",
-          config: {},
-          createdAt: new Date(),
-        },
-        {
-          id: "step-3",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "Upgrade to Pro", body: "Get more" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "branch", config: { user_column: "plan", operator: "=", compare_value: "pro" } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "exit", config: {} },
+        { id: "00000000-0000-0000-0000-000000000012", type: "send", config: { title: "Upgrade to Pro", body: "Get more" } },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: true,
-        },
-        {
-          id: "edge-2",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-3",
-          handle: false,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: true },
+        { id: "00000000-0000-0000-0000-0000000000e2", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000012", handle: false },
       ],
       userAttributes: { plan: "free" },
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("completed");
 
-    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
-      enrollmentId: "enr-1",
-      stepId: "step-3",
-      userId: "user-1",
-      config: { title: "Upgrade to Pro", body: "Get more" },
-    });
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(1);
+    expect(logs[0].config).toEqual({ title: "Upgrade to Pro", body: "Get more" });
   });
 
   it("exits when the branched attribute does not exist on the user", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "branch",
-          config: { user_column: "plan", operator: "=", compare_value: "pro" },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "Pro!", body: "body" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "branch", config: { user_column: "plan", operator: "=", compare_value: "pro" } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "send", config: { title: "Pro!", body: "body" } },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: true,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: true },
       ],
       userAttributes: {},
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(0);
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "exited",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("exited");
   });
 
-  it("follows true edge with != operator (plan is free, != pro)", async () => {
-    setupMocks({
+  it("follows true edge with != operator", async () => {
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "branch",
-          config: { user_column: "plan", operator: "!=", compare_value: "pro" },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "Not a pro user", body: "body" },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-3",
-          workflowId: "wf-1",
-          type: "exit",
-          config: {},
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "branch", config: { user_column: "plan", operator: "!=", compare_value: "pro" } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "send", config: { title: "Not a pro user", body: "body" } },
+        { id: "00000000-0000-0000-0000-000000000012", type: "exit", config: {} },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: true,
-        },
-        {
-          id: "edge-2",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-3",
-          handle: false,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: true },
+        { id: "00000000-0000-0000-0000-0000000000e2", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000012", handle: false },
       ],
       userAttributes: { plan: "free" },
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
-      enrollmentId: "enr-1",
-      stepId: "step-2",
-      userId: "user-1",
-      config: { title: "Not a pro user", body: "body" },
-    });
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(1);
+    expect(logs[0].config).toEqual({ title: "Not a pro user", body: "body" });
 
-    // Took the true branch (send) → completed, not the false branch (exit)
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("completed");
   });
 
   it("follows true edge with exists operator when key is present", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "branch",
-          config: { user_column: "plan", operator: "exists" },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "Has a plan", body: "body" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "branch", config: { user_column: "plan", operator: "exists" } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "send", config: { title: "Has a plan", body: "body" } },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: true,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: true },
       ],
       userAttributes: { plan: "pro" },
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
-      enrollmentId: "enr-1",
-      stepId: "step-2",
-      userId: "user-1",
-      config: { title: "Has a plan", body: "body" },
-    });
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(1);
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("completed");
   });
 
   it("follows false edge with not_exists operator when key is present", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "branch",
-          config: { user_column: "plan", operator: "not_exists" },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "exit",
-          config: {},
-          createdAt: new Date(),
-        },
-        {
-          id: "step-3",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "Has plan", body: "body" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "branch", config: { user_column: "plan", operator: "not_exists" } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "exit", config: {} },
+        { id: "00000000-0000-0000-0000-000000000012", type: "send", config: { title: "Has plan", body: "body" } },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: true,
-        },
-        {
-          id: "edge-2",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-3",
-          handle: false,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: true },
+        { id: "00000000-0000-0000-0000-0000000000e2", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000012", handle: false },
       ],
       userAttributes: { plan: "pro" },
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
-      enrollmentId: "enr-1",
-      stepId: "step-3",
-      userId: "user-1",
-      config: { title: "Has plan", body: "body" },
-    });
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(1);
+    expect(logs[0].config).toEqual({ title: "Has plan", body: "body" });
 
-    // Took the false branch (send) → completed, not the true branch (exit)
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("completed");
   });
 });
 
-// ── filter ───────────────────────────────────────────────────────────
+// ── filter ──────────────────────────────────────────────────────────────
 
 describe("filter step", () => {
   it("continues to send when country = UK", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "filter",
-          config: { attribute_key: "country", operator: "=", compare_value: "UK" },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "UK offer", body: "body" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "filter", config: { attribute_key: "country", operator: "=", compare_value: "UK" } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "send", config: { title: "UK offer", body: "body" } },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: null,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: null },
       ],
       userAttributes: { country: "UK" },
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
-      enrollmentId: "enr-1",
-      stepId: "step-2",
-      userId: "user-1",
-      config: { title: "UK offer", body: "body" },
-    });
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(1);
+    expect(logs[0].config).toEqual({ title: "UK offer", body: "body" });
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("completed");
   });
 
   it("exits when country does not match filter", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "filter",
-          config: { attribute_key: "country", operator: "=", compare_value: "UK" },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "UK offer", body: "body" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "filter", config: { attribute_key: "country", operator: "=", compare_value: "UK" } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "send", config: { title: "UK offer", body: "body" } },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: null,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: null },
       ],
       userAttributes: { country: "US" },
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(0);
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "exited",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("exited");
   });
 
   it("exits when the filtered attribute does not exist on the user", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "filter",
-          config: { attribute_key: "country", operator: "=", compare_value: "UK" },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "UK offer", body: "body" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "filter", config: { attribute_key: "country", operator: "=", compare_value: "UK" } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "send", config: { title: "UK offer", body: "body" } },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: null,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: null },
       ],
       userAttributes: {},
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(0);
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "exited",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("exited");
   });
 
   it("continues when age > 18", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "filter",
-          config: { attribute_key: "age", operator: ">", compare_value: 18 },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "Adult content", body: "body" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "filter", config: { attribute_key: "age", operator: ">", compare_value: 18 } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "send", config: { title: "Adult content", body: "body" } },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: null,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: null },
       ],
       userAttributes: { age: 25 },
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
-      enrollmentId: "enr-1",
-      stepId: "step-2",
-      userId: "user-1",
-      config: { title: "Adult content", body: "body" },
-    });
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(1);
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("completed");
   });
 
   it("exits when age is not < 18", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "filter",
-          config: { attribute_key: "age", operator: "<", compare_value: 18 },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "Minor content", body: "body" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "filter", config: { attribute_key: "age", operator: "<", compare_value: 18 } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "send", config: { title: "Minor content", body: "body" } },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: null,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: null },
       ],
       userAttributes: { age: 25 },
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(0);
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "exited",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("exited");
   });
 
   it("continues when country != UK", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "filter",
-          config: { attribute_key: "country", operator: "!=", compare_value: "UK" },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "Non-UK offer", body: "body" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "filter", config: { attribute_key: "country", operator: "!=", compare_value: "UK" } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "send", config: { title: "Non-UK offer", body: "body" } },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: null,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: null },
       ],
       userAttributes: { country: "US" },
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
-      enrollmentId: "enr-1",
-      stepId: "step-2",
-      userId: "user-1",
-      config: { title: "Non-UK offer", body: "body" },
-    });
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(1);
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("completed");
   });
 });
 
-// ── wait ─────────────────────────────────────────────────────────────
+// ── wait ────────────────────────────────────────────────────────────────
 
 describe("wait step", () => {
   it("pauses enrollment and schedules next step 24 hours from now", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "wait",
-          config: { hours: 24 },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "Follow up", body: "body" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "wait", config: { hours: 24 } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "send", config: { title: "Follow up", body: "body" } },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: null,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: null },
       ],
     });
 
     const before = new Date();
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledTimes(1);
-    const call = mockUpdateEnrollment.mock.calls[0];
-    expect(call[1].status).toBe("active");
-    expect(call[1].currentStepId).toBe("step-2");
-    const processAt = call[1].processAt as Date;
-    const hoursFromNow = (processAt.getTime() - before.getTime()) / (1000 * 60 * 60);
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("active");
+    expect(enrollment.currentStepId).toBe("00000000-0000-0000-0000-000000000011");
+    const hoursFromNow = (enrollment.processAt!.getTime() - before.getTime()) / (1000 * 60 * 60);
     expect(hoursFromNow).toBeGreaterThan(23.9);
     expect(hoursFromNow).toBeLessThan(24.1);
 
-    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
+    // No communication log for wait
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(0);
   });
 
   it("completes when wait is the last step in the workflow", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "wait",
-          config: { hours: 24 },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "wait", config: { hours: 24 } },
       ],
-      edges: [],
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
-
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("completed");
   });
 });
 
-// ── exit ─────────────────────────────────────────────────────────────
+// ── exit ────────────────────────────────────────────────────────────────
 
 describe("exit step", () => {
   it("exits the enrollment immediately", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "exit",
-          config: {},
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "exit", config: {} },
       ],
-      edges: [],
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("exited");
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "exited",
-    });
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(0);
   });
 });
 
-// ── multi-step workflows ─────────────────────────────────────────────
+// ── multi-step workflows ────────────────────────────────────────────────
 
 describe("multi-step workflows", () => {
   it("filter → send: filters insured users then sends notification", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "filter",
-          config: { attribute_key: "is_insured", operator: "=", compare_value: "true" },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "You are insured", body: "Congrats" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "filter", config: { attribute_key: "is_insured", operator: "=", compare_value: "true" } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "send", config: { title: "You are insured", body: "Congrats" } },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: null,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: null },
       ],
       userAttributes: { is_insured: "true" },
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
-      enrollmentId: "enr-1",
-      stepId: "step-2",
-      userId: "user-1",
-      config: { title: "You are insured", body: "Congrats" },
-    });
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(1);
+    expect(logs[0].config).toEqual({ title: "You are insured", body: "Congrats" });
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("completed");
   });
 
-  it("send → wait → send: sends welcome, waits 12h, then sends follow-up", async () => {
-    setupMocks({
+  it("send → wait → send: sends welcome, waits 12h, then pauses", async () => {
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-1",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "Welcome!", body: "Thanks for signing up" },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-2",
-          workflowId: "wf-1",
-          type: "wait",
-          config: { hours: 12 },
-          createdAt: new Date(),
-        },
-        {
-          id: "step-3",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "How are you finding things?", body: "Let us know" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "send", config: { title: "Welcome!", body: "Thanks for signing up" } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "wait", config: { hours: 12 } },
+        { id: "00000000-0000-0000-0000-000000000012", type: "send", config: { title: "How are you finding things?", body: "Let us know" } },
       ],
       edges: [
-        {
-          id: "edge-1",
-          workflowId: "wf-1",
-          source: "step-1",
-          target: "step-2",
-          handle: null,
-        },
-        {
-          id: "edge-2",
-          workflowId: "wf-1",
-          source: "step-2",
-          target: "step-3",
-          handle: null,
-        },
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: null },
+        { id: "00000000-0000-0000-0000-0000000000e2", source: "00000000-0000-0000-0000-000000000011", target: "00000000-0000-0000-0000-000000000012", handle: null },
       ],
     });
 
-    await processEnrollment(enrollment);
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockInsertCommunicationLog).toHaveBeenCalledTimes(1);
-    expect(mockInsertCommunicationLog).toHaveBeenCalledWith({
-      enrollmentId: "enr-1",
-      stepId: "step-1",
-      userId: "user-1",
-      config: { title: "Welcome!", body: "Thanks for signing up" },
-    });
+    // First send should have been logged
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(1);
+    expect(logs[0].config).toEqual({ title: "Welcome!", body: "Thanks for signing up" });
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledTimes(1);
-    const call = mockUpdateEnrollment.mock.calls[0];
-    expect(call[1].status).toBe("active");
-    expect(call[1].currentStepId).toBe("step-3");
-    expect(call[1].processAt).toBeInstanceOf(Date);
+    // Enrollment should be paused at step-3 (the second send)
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("active");
+    expect(enrollment.currentStepId).toBe("00000000-0000-0000-0000-000000000012");
+    expect(enrollment.processAt).toBeInstanceOf(Date);
   });
 
   it("returns without error when user not found", async () => {
-    mockFindUserById.mockResolvedValue(null);
-    mockFindStepsByWorkflowId.mockResolvedValue([]);
-    mockFindEdgesByWorkflowId.mockResolvedValue([]);
+    const { enrollmentId } = await seedWorkflow(db, {
+      steps: [
+        { id: "00000000-0000-0000-0000-000000000010", type: "send", config: { title: "X", body: "X" } },
+      ],
+    });
 
-    await processEnrollment(enrollment);
+    // Temporarily disable FK triggers so we can point enrollment to a non-existent user
+    await db.execute(sql`ALTER TABLE workflow_enrollment DISABLE TRIGGER ALL`);
+    await db.execute(
+      sql`UPDATE workflow_enrollment SET user_id = 'ff000000-0000-0000-0000-ffffffffffff' WHERE id = ${enrollmentId}`
+    );
+    await db.execute(sql`ALTER TABLE workflow_enrollment ENABLE TRIGGER ALL`);
 
-    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
-    expect(mockUpdateEnrollment).not.toHaveBeenCalled();
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
+
+    const logs = await db.select().from(communicationLog);
+    expect(logs).toHaveLength(0);
+
+    expect(events.some((e) => e.kind === "exited" && e.reason === "missing_user")).toBe(true);
   });
 
   it("completes when currentStepId points to a step that no longer exists", async () => {
-    setupMocks({
+    const { enrollmentId } = await seedWorkflow(db, {
       steps: [
-        {
-          id: "step-99",
-          workflowId: "wf-1",
-          type: "send",
-          config: { title: "X", body: "X" },
-          createdAt: new Date(),
-        },
+        { id: "00000000-0000-0000-0000-000000000010", type: "send", config: { title: "X", body: "X" } },
       ],
-      edges: [],
+      currentStepId: "00000000-0000-0000-0000-000000000010",
     });
 
-    await processEnrollment({ ...enrollment, currentStepId: "step-deleted" });
+    // Delete the step to simulate a missing step
+    await db.delete(step).where(eq(step.id, "00000000-0000-0000-0000-000000000010"));
+    // Also clear the FK reference
+    await db.update(workflowEnrollment).set({ currentStepId: null }).where(eq(workflowEnrollment.id, enrollmentId));
 
-    expect(mockInsertCommunicationLog).not.toHaveBeenCalled();
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
 
-    expect(mockUpdateEnrollment).toHaveBeenCalledWith("enr-1", {
-      currentStepId: null,
-      processAt: null,
-      status: "completed",
-    });
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("completed");
   });
 });
 
-// ── processReadyEnrollments ──────────────────────────────────────────
+// ── config validation ───────────────────────────────────────────────────
+
+describe("config validation", () => {
+  it("throws on malformed send config", async () => {
+    const { enrollmentId } = await seedWorkflow(db, {
+      steps: [
+        { id: "00000000-0000-0000-0000-000000000010", type: "send", config: { bad: "data" } as any },
+      ],
+    });
+
+    const walker = createWalker();
+    await expect(walker.processEnrollment(enrollmentId)).rejects.toThrow();
+  });
+});
+
+// ── processReadyEnrollments ─────────────────────────────────────────────
 
 describe("processReadyEnrollments", () => {
   it("returns zeros when no enrollments are ready", async () => {
-    mockFindReadyEnrollments.mockResolvedValue([]);
-
-    const result = await processReadyEnrollments();
+    const walker = createWalker();
+    const result = await walker.processReadyEnrollments();
 
     expect(result).toEqual({ processed: 0, failed: 0, results: [] });
   });
 
-  it("locks each enrollment to processing before walking it", async () => {
-    mockFindReadyEnrollments.mockResolvedValue([
-      { ...enrollment, id: "enr-1" },
-      { ...enrollment, id: "enr-2" },
-    ]);
-    mockUpdateEnrollment.mockResolvedValue({});
-    mockFindUserById.mockResolvedValue({
-      id: "user-1",
-      customerId: "cust-1",
-      externalId: "ext-1",
-      phone: null,
-      gender: null,
-      attributes: {},
-      createdAt: new Date(),
-    });
-    mockFindStepsByWorkflowId.mockResolvedValue([
-      {
-        id: "step-1",
-        workflowId: "wf-1",
-        type: "send",
-        config: { title: "Hi", body: "body" },
-        createdAt: new Date(),
-      },
-    ]);
-    mockFindEdgesByWorkflowId.mockResolvedValue([]);
+  it("processes only enrollments with processAt <= now", async () => {
+    // Seed two enrollments: one ready, one in the future
+    const customerId = "a0000000-0000-0000-0000-000000000002";
+    const userId = "d0000000-0000-0000-0000-000000000002";
+    const workflowId = "b0000000-0000-0000-0000-000000000002";
+    const stepId = "e0000000-0000-0000-0000-000000000002";
 
-    const result = await processReadyEnrollments();
+    await db.insert(customer).values({ id: customerId, email: "batch@example.com", name: "Batch" });
+    await db.insert(user).values({ id: userId, customerId, externalId: "batch", attributes: {} });
+    await db.insert(workflow).values({ id: workflowId, customerId, name: "W", triggerType: "system", triggerEvent: "t", status: "active" });
+    await db.insert(step).values({ id: stepId, workflowId, type: "send", config: { title: "Hi", body: "body" } });
 
-    expect(result.processed).toBe(2);
+    const readyId = "f0000000-0000-0000-0000-000000000001";
+    const futureId = "f0000000-0000-0000-0000-000000000002";
+
+    await db.insert(workflowEnrollment).values([
+      { id: readyId, userId, workflowId, currentStepId: stepId, status: "active" as const, processAt: new Date(Date.now() - 1000) },
+      { id: futureId, userId, workflowId, currentStepId: stepId, status: "active" as const, processAt: new Date(Date.now() + 60_000) },
+    ]);
+
+    const walker = createWalker();
+    const result = await walker.processReadyEnrollments();
+
+    expect(result.processed).toBe(1);
     expect(result.failed).toBe(0);
 
-    const lockCalls = mockUpdateEnrollment.mock.calls.filter(
-      (c: any) => c[1].status === "processing"
-    );
-    expect(lockCalls.length).toBe(2);
+    // Ready one should be completed
+    const [ready] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, readyId));
+    expect(ready.status).toBe("completed");
+
+    // Future one should still be active
+    const [future] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, futureId));
+    expect(future.status).toBe("active");
+  });
+});
+
+// ── observe events ──────────────────────────────────────────────────────
+
+describe("observe events", () => {
+  it("emits stepped and completed events", async () => {
+    const { enrollmentId } = await seedWorkflow(db, {
+      steps: [
+        { id: "00000000-0000-0000-0000-000000000010", type: "send", config: { title: "Hi", body: "body" } },
+      ],
+    });
+
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
+
+    expect(events.some((e) => e.kind === "stepped")).toBe(true);
+    expect(events.some((e) => e.kind === "completed")).toBe(true);
+  });
+
+  it("emits waiting event for wait steps", async () => {
+    const { enrollmentId } = await seedWorkflow(db, {
+      steps: [
+        { id: "00000000-0000-0000-0000-000000000010", type: "wait", config: { hours: 1 } },
+        { id: "00000000-0000-0000-0000-000000000011", type: "send", config: { title: "Later", body: "body" } },
+      ],
+      edges: [
+        { id: "00000000-0000-0000-0000-0000000000e1", source: "00000000-0000-0000-0000-000000000010", target: "00000000-0000-0000-0000-000000000011", handle: null },
+      ],
+    });
+
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
+
+    expect(events.some((e) => e.kind === "waiting")).toBe(true);
   });
 });

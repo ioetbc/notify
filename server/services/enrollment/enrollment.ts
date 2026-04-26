@@ -1,23 +1,60 @@
 import { addHours } from "date-fns";
 import { match } from "ts-pattern";
-import * as repository from "../../repository/enrollment";
+import { eq, and, lte } from "drizzle-orm";
+import type { Db } from "../../db";
+import {
+  user,
+  step,
+  stepEdge,
+  workflowEnrollment,
+  communicationLog,
+  WaitConfigSchema,
+  BranchConfigSchema,
+  SendConfigSchema,
+  FilterConfigSchema,
+  ExitConfigSchema,
+} from "../../db/schema";
 import type {
   Step,
   StepEdge,
-  WorkflowEnrollment,
-  WaitConfig,
-  BranchConfig,
   SendConfig,
-  FilterConfig,
 } from "../../db/schema";
 
 type UserAttributes = Record<string, string | number | boolean>;
 
+type SendHandler = (payload: {
+  userId: string;
+  enrollmentId: string;
+  stepId: string;
+  config: SendConfig;
+}) => Promise<void>;
+
+type WalkResult =
+  | { action: "continue"; nextStepId: string }
+  | { action: "wait"; nextStepId: string; processAt: Date }
+  | { action: "exit" }
+  | { action: "complete" };
+
+type StepType = Step["type"];
+
+export type StepEvent =
+  | { kind: "stepped"; stepId: string; type: StepType; result: WalkResult }
+  | { kind: "exited"; reason: "filter" | "branch" | "missing_user" }
+  | { kind: "completed" }
+  | { kind: "waiting"; until: Date };
+
+type WalkObserver = (event: StepEvent) => void;
+
+export interface EnrollmentWalkerDeps {
+  db: Db;
+  onSend: SendHandler;
+  observe?: WalkObserver;
+}
+
 function evaluateBranchCondition(
-  config: BranchConfig,
+  config: { user_column: string; operator: "=" | "!=" | "exists" | "not_exists"; compare_value?: string },
   attributes: UserAttributes
 ): boolean | null {
-  // If the attribute key doesn't exist, return null to signal exit
   if (!(config.user_column in attributes)) return null;
 
   const value = attributes[config.user_column];
@@ -31,12 +68,9 @@ function evaluateBranchCondition(
 }
 
 function evaluateFilterCondition(
-  config: FilterConfig,
+  config: { attribute_key: string; operator: "=" | "!=" | ">" | "<"; compare_value: string | number | boolean },
   attributes: UserAttributes
 ): boolean {
-  console.log(`[step-walker] Filter config:`, JSON.stringify(config));
-  console.log(`[step-walker] User attributes:`, JSON.stringify(attributes));
-  console.log(`[step-walker] Checking attribute_key "${config.attribute_key}" in attributes: ${config.attribute_key in attributes}`);
   if (!(config.attribute_key in attributes)) return false;
 
   const value = attributes[config.attribute_key];
@@ -60,12 +94,6 @@ function findOutgoingEdge(
   return edges.find((e) => e.source === stepId);
 }
 
-type WalkResult =
-  | { action: "continue"; nextStepId: string }
-  | { action: "wait"; nextStepId: string; processAt: Date }
-  | { action: "exit" }
-  | { action: "complete" };
-
 function walkStep(
   currentStep: Step,
   edges: StepEdge[],
@@ -73,30 +101,26 @@ function walkStep(
 ): WalkResult {
   return match(currentStep.type)
     .with("send", () => {
-      const config = currentStep.config as SendConfig;
-      console.log(
-        `[step-walker] SEND to user: "${config.title}" — "${config.body}"`
-      );
-
+      SendConfigSchema.parse(currentStep.config);
       const edge = findOutgoingEdge(currentStep.id, edges);
-
       return edge
         ? { action: "continue" as const, nextStepId: edge.target }
         : { action: "complete" as const };
     })
     .with("branch", () => {
-      const config = currentStep.config as BranchConfig;
+      const config = BranchConfigSchema.parse(currentStep.config);
       const result = evaluateBranchCondition(config, attributes);
 
       if (result === null) return { action: "exit" as const };
 
       const edge = findOutgoingEdge(currentStep.id, edges, result);
+
       return edge
         ? { action: "continue" as const, nextStepId: edge.target }
         : { action: "complete" as const };
     })
     .with("filter", () => {
-      const config = currentStep.config as FilterConfig;
+      const config = FilterConfigSchema.parse(currentStep.config);
       const passes = evaluateFilterCondition(config, attributes);
 
       if (!passes) return { action: "exit" as const };
@@ -107,12 +131,13 @@ function walkStep(
         : { action: "complete" as const };
     })
     .with("wait", () => {
-      const config = currentStep.config as WaitConfig;
+      const config = WaitConfigSchema.parse(currentStep.config);
       const edge = findOutgoingEdge(currentStep.id, edges);
 
       if (!edge) return { action: "complete" as const };
 
       const processAt = addHours(new Date(), config.hours);
+
       return {
         action: "wait" as const,
         nextStepId: edge.target,
@@ -120,136 +145,215 @@ function walkStep(
       };
     })
     .with("exit", () => {
+      ExitConfigSchema.parse(currentStep.config);
+
       return { action: "exit" as const };
     })
     .exhaustive();
 }
 
-export async function processEnrollment(enrollment: WorkflowEnrollment) {
-  console.log(`[step-walker] Processing enrollment ${enrollment.id} (workflow: ${enrollment.workflowId}, user: ${enrollment.userId})`);
+export class EnrollmentWalker {
+  private db: Db;
+  private onSend: SendHandler;
+  private observe?: WalkObserver;
 
-  const user = await repository.findUserById(enrollment.userId);
-
-  if (!user) {
-    console.log(`[step-walker] User ${enrollment.userId} not found — skipping`);
-    return;
+  constructor(deps: EnrollmentWalkerDeps) {
+    this.db = deps.db;
+    this.onSend = deps.onSend;
+    this.observe = deps.observe;
   }
 
-  const steps = await repository.findStepsByWorkflowId(enrollment.workflowId);
-  const edges = await repository.findEdgesByWorkflowId(enrollment.workflowId);
-
-  console.log(`[step-walker] Loaded ${steps.length} steps and ${edges.length} edges`);
-
-  const stepMap = new Map(steps.map((s) => [s.id, s]));
-
-  let currentStepId = enrollment.currentStepId;
-
-  while (currentStepId) {
-    const currentStep = stepMap.get(currentStepId);
-
-    if (!currentStep) {
-      console.log(`[step-walker] Step ${currentStepId} not found in workflow — ending`);
-      break;
-    }
-
-    console.log(`[step-walker] Walking step ${currentStep.id} (type: ${currentStep.type})`);
-
-    if (currentStep.type === "send") {
-      await repository.insertCommunicationLog({
-        enrollmentId: enrollment.id,
-        stepId: currentStep.id,
-        userId: enrollment.userId,
-        config: currentStep.config as SendConfig,
-      });
-    }
-
-    const result = walkStep(
-      currentStep,
-      edges,
-      user.attributes as UserAttributes
-    );
-
-    console.log(`[step-walker] Step result: ${result.action}`);
-
-    const terminal = await match(result)
-      .with({ action: "continue" }, (r) => {
-        console.log(`[step-walker] Continuing to step ${r.nextStepId}`);
-        currentStepId = r.nextStepId;
-        return false;
-      })
-      .with({ action: "wait" }, async (r) => {
-        console.log(`[step-walker] Waiting until ${r.processAt.toISOString()} — next step ${r.nextStepId}`);
-        await repository.updateEnrollment(enrollment.id, {
-          currentStepId: r.nextStepId,
-          processAt: r.processAt,
-          status: "active",
-        });
-        return true;
-      })
-      .with({ action: "exit" }, async () => {
-        console.log(`[step-walker] User exited workflow (failed branch/filter condition)`);
-        await repository.updateEnrollment(enrollment.id, {
-          currentStepId: null,
-          processAt: null,
-          status: "exited",
-        });
-        return true;
-      })
-      .with({ action: "complete" }, async () => {
-        console.log(`[step-walker] Workflow complete — no more steps`);
-        await repository.updateEnrollment(enrollment.id, {
-          currentStepId: null,
-          processAt: null,
-          status: "completed",
-        });
-        return true;
-      })
-      .exhaustive();
-
-    if (terminal) return;
+  private emit(event: StepEvent) {
+    this.observe?.(event);
   }
 
-  console.log(`[step-walker] Reached end of chain — marking completed`);
-  await repository.updateEnrollment(enrollment.id, {
-    currentStepId: null,
-    processAt: null,
-    status: "completed",
-  });
-}
+  private async findReadyEnrollments() {
+    return this.db
+      .select()
+      .from(workflowEnrollment)
+      .where(
+        and(
+          eq(workflowEnrollment.status, "active"),
+          lte(workflowEnrollment.processAt, new Date())
+        )
+      );
+  }
 
-export async function processReadyEnrollments() {
-  const enrollments = await repository.findReadyEnrollments();
-  console.log(`[step-walker] Found ${enrollments.length} ready enrollments`);
+  private async findEnrollmentById(enrollmentId: string) {
+    const rows = await this.db
+      .select()
+      .from(workflowEnrollment)
+      .where(eq(workflowEnrollment.id, enrollmentId));
+    return rows[0] ?? null;
+  }
 
-  const results: { id: string; status: "processed" | "failed"; error?: string }[] = [];
+  private async findUserById(userId: string) {
+    const rows = await this.db.select().from(user).where(eq(user.id, userId));
+    return rows[0] ?? null;
+  }
 
-  for (const enrollment of enrollments) {
-    console.log(`[step-walker] Locking enrollment ${enrollment.id} → processing`);
-    await repository.updateEnrollment(enrollment.id, { status: "processing" });
+  private async findStepsByWorkflowId(workflowId: string) {
+    return this.db.select().from(step).where(eq(step.workflowId, workflowId));
+  }
 
-    try {
-      await processEnrollment(enrollment);
-      results.push({ id: enrollment.id, status: "processed" });
-    } catch (error) {
-      console.error(`[step-walker] Failed to process enrollment ${enrollment.id}:`, error);
+  private async findEdgesByWorkflowId(workflowId: string) {
+    return this.db.select().from(stepEdge).where(eq(stepEdge.workflowId, workflowId));
+  }
 
-      try {
-        await repository.updateEnrollment(enrollment.id, { status: "active" });
-      } catch (recoveryError) {
-        console.error(`[step-walker] CRITICAL: Failed to reset enrollment ${enrollment.id} to active — stuck in processing:`, recoveryError);
+  private async updateEnrollment(
+    enrollmentId: string,
+    values: Partial<{
+      currentStepId: string | null;
+      processAt: Date | null;
+      status: "active" | "processing" | "completed" | "exited";
+    }>
+  ) {
+    const [updated] = await this.db
+      .update(workflowEnrollment)
+      .set(values)
+      .where(eq(workflowEnrollment.id, enrollmentId))
+      .returning();
+    return updated;
+  }
+
+  private async insertCommunicationLog(values: {
+    enrollmentId: string;
+    stepId: string;
+    userId: string;
+    config: SendConfig;
+  }) {
+    const [row] = await this.db
+      .insert(communicationLog)
+      .values(values)
+      .returning();
+    return row;
+  }
+
+  async processEnrollment(enrollmentId: string) {
+    const enrollment = await this.findEnrollmentById(enrollmentId);
+
+    if (!enrollment) return;
+
+    const user = await this.findUserById(enrollment.userId);
+
+    if (!user) {
+      this.emit({ kind: "exited", reason: "missing_user" });
+      return;
+    }
+
+    const steps = await this.findStepsByWorkflowId(enrollment.workflowId);
+    const edges = await this.findEdgesByWorkflowId(enrollment.workflowId);
+
+    const stepMap = new Map(steps.map((s) => [s.id, s]));
+    
+    let currentStepId = enrollment.currentStepId;
+
+    while (currentStepId) {
+      const currentStep = stepMap.get(currentStepId);
+
+      if (!currentStep) break;
+
+      if (currentStep.type === "send") {
+        const config = SendConfigSchema.parse(currentStep.config);
+
+        await this.onSend({
+          userId: enrollment.userId,
+          enrollmentId: enrollment.id,
+          stepId: currentStep.id,
+          config,
+        });
+
+        await this.insertCommunicationLog({
+          enrollmentId: enrollment.id,
+          stepId: currentStep.id,
+          userId: enrollment.userId,
+          config,
+        });
       }
 
-      results.push({
-        id: enrollment.id,
-        status: "failed",
-        error: error instanceof Error ? error.message : String(error),
-      });
+      const result = walkStep(
+        currentStep,
+        edges,
+        user.attributes as UserAttributes
+      );
+
+      this.emit({ kind: "stepped", stepId: currentStep.id, type: currentStep.type, result });
+
+      const terminal = await match(result)
+        .with({ action: "continue" }, (r) => {
+          currentStepId = r.nextStepId;
+          return false;
+        })
+        .with({ action: "wait" }, async (r) => {
+          await this.updateEnrollment(enrollment.id, {
+            currentStepId: r.nextStepId,
+            processAt: r.processAt,
+            status: "active",
+          });
+          this.emit({ kind: "waiting", until: r.processAt });
+          return true;
+        })
+        .with({ action: "exit" }, async () => {
+          await this.updateEnrollment(enrollment.id, {
+            currentStepId: null,
+            processAt: null,
+            status: "exited",
+          });
+          return true;
+        })
+        .with({ action: "complete" }, async () => {
+          await this.updateEnrollment(enrollment.id, {
+            currentStepId: null,
+            processAt: null,
+            status: "completed",
+          });
+          this.emit({ kind: "completed" });
+          return true;
+        })
+        .exhaustive();
+
+      if (terminal) return;
     }
+
+    await this.updateEnrollment(enrollment.id, {
+      currentStepId: null,
+      processAt: null,
+      status: "completed",
+    });
+
+    this.emit({ kind: "completed" });
   }
 
-  return {
-    processed: results.filter((r) => r.status === "processed").length,
-    failed: results.filter((r) => r.status === "failed").length,
-    results,
-  };
+  async processReadyEnrollments() {
+    const enrollments = await this.findReadyEnrollments();
+
+    const results: { id: string; status: "processed" | "failed"; error?: string }[] = [];
+
+    for (const enrollment of enrollments) {
+      await this.updateEnrollment(enrollment.id, { status: "processing" });
+
+      try {
+        await this.processEnrollment(enrollment.id);
+        results.push({ id: enrollment.id, status: "processed" });
+      } catch (error) {
+        try {
+          await this.updateEnrollment(enrollment.id, { status: "active" });
+        } catch {
+          // stuck in processing — nothing we can do here
+        }
+
+        results.push({
+          id: enrollment.id,
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return {
+      processed: results.filter((r) => r.status === "processed").length,
+      failed: results.filter((r) => r.status === "failed").length,
+      results,
+    };
+  }
 }
