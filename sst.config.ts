@@ -26,7 +26,7 @@ export default $config({
 
     // Admin API - internal endpoints for the admin portal (workflow builder, etc.)
     const adminApi = new sst.aws.Function('AdminApi', {
-      handler: 'server/functions/admin/index.handler',
+      handler: 'apps/server/functions/admin/index.handler',
       link: [db],
       url: {
         cors: {
@@ -39,7 +39,7 @@ export default $config({
 
     // Public API - customer-facing endpoints (user attributes, events, etc.)
     const publicApi = new sst.aws.Function('PublicApi', {
-      handler: 'server/functions/public/index.handler',
+      handler: 'apps/server/functions/public/index.handler',
       link: [db],
       url: {
         cors: {

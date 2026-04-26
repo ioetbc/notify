@@ -23,5 +23,5 @@
 		"noFallthroughCasesInSwitch": true,
 		"noUncheckedSideEffectImports": true
 	},
-	"include": ["client", "server/functions/admin/index.ts"]
+	"include": ["apps/client", "apps/server/functions/admin/index.ts"]
 }
