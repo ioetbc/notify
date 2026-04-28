@@ -24,6 +24,7 @@
     "@hono/zod-validator": "^0.7.6",
     "@neondatabase/serverless": "^1.1.0",
     "drizzle-orm": "^0.45.2",
+    "expo-server-sdk": "^6.1.0",
     "hono": "^4.12.14",
     "postgres": "^3.4.9",
     "ts-pattern": "^5.9.0",

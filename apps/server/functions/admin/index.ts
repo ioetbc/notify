@@ -1,13 +1,42 @@
 import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
-import { db, user, event } from "../../db";
+import { db, user, event, pushToken } from "../../db";
 import { eq, sql } from "drizzle-orm";
 import { workflows } from "./workflows";
 import { EnrollmentWalker } from "../../services/enrollment";
+import Expo from "expo-server-sdk";
+
+const expo = new Expo();
 
 const walker = new EnrollmentWalker({
   db,
-  onSend: async () => {},
+  onSend: async ({ userId, config }) => {
+    console.log('[onSend] userId:', userId, 'config:', JSON.stringify(config));
+
+    const tokens = await db
+      .select()
+      .from(pushToken)
+      .where(eq(pushToken.userId, userId));
+
+    console.log('[onSend] tokens found:', tokens.length, JSON.stringify(tokens));
+
+    if (tokens.length === 0) return;
+
+    const messages = tokens
+      .filter((t) => Expo.isExpoPushToken(t.token))
+      .map((t) => ({
+        to: t.token,
+        title: config.title,
+        body: config.body,
+      }));
+
+    console.log('[onSend] messages to send:', messages.length, JSON.stringify(messages));
+
+    if (messages.length === 0) return;
+
+    const tickets = await expo.sendPushNotificationsAsync(messages);
+    console.log('[onSend] tickets:', JSON.stringify(tickets));
+  },
 });
 
 const app = new Hono();

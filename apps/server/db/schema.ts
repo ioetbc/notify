@@ -167,6 +167,19 @@ export const event = pgTable("event", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
+export const pushToken = pgTable(
+  "push_token",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    token: text("token").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [unique().on(table.userId, table.token)]
+);
+
 export const customerRelations = relations(customer, ({ many }) => ({
   users: many(user),
   workflows: many(workflow),
@@ -180,6 +193,7 @@ export const userRelations = relations(user, ({ one, many }) => ({
   }),
   enrollments: many(workflowEnrollment),
   events: many(event),
+  pushTokens: many(pushToken),
 }));
 
 export const workflowRelations = relations(workflow, ({ one, many }) => ({
@@ -247,6 +261,13 @@ export const eventRelations = relations(event, ({ one }) => ({
   }),
 }));
 
+export const pushTokenRelations = relations(pushToken, ({ one }) => ({
+  user: one(user, {
+    fields: [pushToken.userId],
+    references: [user.id],
+  }),
+}));
+
 export type Customer = typeof customer.$inferSelect;
 export type NewCustomer = typeof customer.$inferInsert;
 export type Workflow = typeof workflow.$inferSelect;
@@ -258,3 +279,5 @@ export type NewStepEdge = typeof stepEdge.$inferInsert;
 export type WorkflowEnrollment = typeof workflowEnrollment.$inferSelect;
 export type Event = typeof event.$inferSelect;
 export type NewEvent = typeof event.$inferInsert;
+export type PushToken = typeof pushToken.$inferSelect;
+export type NewPushToken = typeof pushToken.$inferInsert;

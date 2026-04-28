@@ -5,6 +5,7 @@ import {
   event,
   workflow,
   workflowEnrollment,
+  pushToken,
 } from "../../db";
 import type { NewEvent } from "../../db";
 import type { Attributes } from "../../schemas/public";
@@ -89,4 +90,21 @@ export async function createWorkflowEnrollment(values: {
     .values(values)
     .returning();
   return created;
+}
+
+export async function upsertPushToken(userId: string, token: string) {
+  const [row] = await db
+    .insert(pushToken)
+    .values({ userId, token })
+    .onConflictDoNothing()
+    .returning();
+
+  if (!row) {
+    const existing = await db.query.pushToken.findFirst({
+      where: and(eq(pushToken.userId, userId), eq(pushToken.token, token)),
+    });
+    return existing!;
+  }
+
+  return row;
 }

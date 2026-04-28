@@ -18,6 +18,10 @@ export const createUserSchema = z.object({
 
 const eventNameRegex = /^[a-z0-9_]+$/;
 
+export const registerPushTokenSchema = z.object({
+  token: z.string().min(1),
+});
+
 export const trackEventSchema = z.object({
   external_id: z.string().min(1),
   event: z.string().min(1).regex(eventNameRegex, {

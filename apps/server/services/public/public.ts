@@ -94,6 +94,38 @@ export async function enrollUser(userId: string, workflowId: string) {
   });
 }
 
+export async function registerPushToken(
+  customerId: string,
+  externalId: string,
+  token: string
+) {
+  const foundUser = await repository.findUserByExternalId(customerId, externalId);
+  if (!foundUser) return null;
+
+  const pushToken = await repository.upsertPushToken(foundUser.id, token);
+
+  return {
+    id: pushToken.id,
+    user_id: pushToken.userId,
+    token: pushToken.token,
+    created_at: pushToken.createdAt!.toISOString(),
+  };
+}
+
+export async function getUser(customerId: string, externalId: string) {
+  const foundUser = await repository.findUserByExternalId(customerId, externalId);
+  if (!foundUser) return null;
+
+  return {
+    id: foundUser.id,
+    external_id: foundUser.externalId,
+    phone: foundUser.phone,
+    gender: foundUser.gender,
+    attributes: foundUser.attributes,
+    created_at: foundUser.createdAt!.toISOString(),
+  };
+}
+
 export async function trackEvent(
   customerId: string,
   externalId: string,

@@ -28,6 +28,9 @@ export default $config({
     const adminApi = new sst.aws.Function('AdminApi', {
       handler: 'apps/server/functions/admin/index.handler',
       link: [db],
+      nodejs: {
+        install: ['expo-server-sdk'],
+      },
       url: {
         cors: {
           allowOrigins: ['*'],

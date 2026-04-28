@@ -6,6 +6,7 @@ import {
   createUserSchema,
   updateUserAttributesSchema,
   trackEventSchema,
+  registerPushTokenSchema,
 } from "../../schemas/public";
 const app = new Hono();
 
@@ -73,6 +74,51 @@ const routes = app
       }
 
       return c.json(result, 200);
+    }
+  )
+  .get("/v1/users/:external_id", async (c) => {
+    const customerId = getCustomerId(c);
+    const externalId = c.req.param("external_id");
+
+    const result = await service.getUser(customerId, externalId);
+
+    if (!result) {
+      return c.json(
+        {
+          error: {
+            code: "user_not_found",
+            message: `No user found with external_id '${externalId}'`,
+          },
+        },
+        404
+      );
+    }
+
+    return c.json(result, 200);
+  })
+  .post(
+    "/v1/users/:external_id/push-tokens",
+    zValidator("json", registerPushTokenSchema),
+    async (c) => {
+      const customerId = getCustomerId(c);
+      const externalId = c.req.param("external_id");
+      const { token } = c.req.valid("json");
+
+      const result = await service.registerPushToken(customerId, externalId, token);
+
+      if (!result) {
+        return c.json(
+          {
+            error: {
+              code: "user_not_found",
+              message: `No user found with external_id '${externalId}'`,
+            },
+          },
+          404
+        );
+      }
+
+      return c.json(result, 201);
     }
   )
   .post("/v1/events", zValidator("json", trackEventSchema), async (c) => {
