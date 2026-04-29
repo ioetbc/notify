@@ -10,7 +10,7 @@ type CanvasNode = Node<StepNodeData, StepType>;
 export function getLayoutedElements(
   nodes: CanvasNode[],
   edges: Edge[],
-  direction: 'TB' | 'LR' = 'TB'
+  direction: 'TB' | 'LR' = 'LR'
 ): { nodes: CanvasNode[]; edges: Edge[] } {
   const dagreGraph = new dagre.graphlib.Graph();
   dagreGraph.setDefaultEdgeLabel(() => ({}));

@@ -1,3 +1,18 @@
+import { useState } from 'react';
+import { match } from 'ts-pattern';
+import { ConfigModal } from '@/components/ui/config-modal';
+import { Button } from '@/components/ui/button';
+import { DialogFooter } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import type {
   TriggerType,
   TriggerEvent,
@@ -20,104 +35,148 @@ interface ConfigPanelProps {
 
 export function ConfigPanel({ node, onUpdate, onClose, userColumns, eventNames }: ConfigPanelProps) {
   const data = node.data;
+  const [draft, setDraft] = useState(data.config);
+  const title = `${data.type.charAt(0).toUpperCase()}${data.type.slice(1)} Step`;
+  const isExit = data.type === 'exit';
+
+  function handleSave() {
+    onUpdate(draft as Parameters<typeof onUpdate>[0]);
+    onClose();
+  }
 
   return (
-    <div className="w-72 border-l border-gray-200 bg-white p-4">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="font-semibold text-gray-900 capitalize">{data.type} Step</h3>
-        <button
-          onClick={onClose}
-          className="text-gray-400 hover:text-gray-600"
-        >
-          ×
-        </button>
-      </div>
+    <ConfigModal
+      open
+      onOpenChange={(o) => { if (!o) onClose(); }}
+      title={title}
+    >
+      {match(data)
+        .with({ type: 'trigger' }, () => (
+          <TriggerConfig
+            config={draft as TriggerNodeData['config']}
+            onChange={(c) => setDraft(c)}
+            eventNames={eventNames}
+          />
+        ))
+        .with({ type: 'wait' }, () => (
+          <WaitConfig
+            config={draft as WaitNodeData['config']}
+            onChange={(c) => setDraft(c)}
+          />
+        ))
+        .with({ type: 'branch' }, () => (
+          <BranchConfig
+            config={draft as BranchNodeData['config']}
+            onChange={(c) => setDraft(c)}
+            userColumns={userColumns}
+          />
+        ))
+        .with({ type: 'send' }, () => (
+          <SendConfig
+            config={draft as SendNodeData['config']}
+            onChange={(c) => setDraft(c)}
+          />
+        ))
+        .with({ type: 'filter' }, () => (
+          <FilterConfig
+            config={draft as FilterNodeData['config']}
+            onChange={(c) => setDraft(c)}
+            userColumns={userColumns}
+          />
+        ))
+        .with({ type: 'exit' }, () => (
+          <p className="text-sm text-gray-500">
+            This step ends the workflow early. The enrollment will be marked as exited.
+          </p>
+        ))
+        .exhaustive()}
 
-      {data.type === 'trigger' && (
-        <TriggerConfig config={data.config} onUpdate={onUpdate} eventNames={eventNames} />
+      {!isExit && (
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave}>Save</Button>
+        </DialogFooter>
       )}
-      {data.type === 'wait' && (
-        <WaitConfig config={data.config} onUpdate={onUpdate} />
-      )}
-      {data.type === 'branch' && (
-        <BranchConfig config={data.config} onUpdate={onUpdate} userColumns={userColumns} />
-      )}
-      {data.type === 'send' && (
-        <SendConfig config={data.config} onUpdate={onUpdate} />
-      )}
-      {data.type === 'filter' && (
-        <FilterConfig config={data.config} onUpdate={onUpdate} userColumns={userColumns} />
-      )}
-      {data.type === 'exit' && (
-        <p className="text-sm text-gray-500">
-          This step ends the workflow early. The enrollment will be marked as exited.
-        </p>
-      )}
+    </ConfigModal>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <Label>{label}</Label>
+      {children}
     </div>
   );
 }
 
 function TriggerConfig({
   config,
-  onUpdate,
+  onChange,
   eventNames,
 }: {
   config: TriggerNodeData['config'];
-  onUpdate: (config: TriggerNodeData['config']) => void;
+  onChange: (config: TriggerNodeData['config']) => void;
   eventNames: string[];
 }) {
   return (
     <div className="space-y-3">
-      <div>
-        <label className="block text-sm text-gray-700 mb-1">Trigger Type</label>
-        <select
+      <Field label="Trigger Type">
+        <Select
           value={config.triggerType}
-          onChange={(e) => {
-            const triggerType = e.target.value as TriggerType;
-            const event = triggerType === 'system'
-              ? SYSTEM_EVENTS[0]
-              : (eventNames[0] ?? '');
-            onUpdate({ triggerType, event });
+          onValueChange={(v) => {
+            const triggerType = v as TriggerType;
+            const event = triggerType === 'system' ? SYSTEM_EVENTS[0] : (eventNames[0] ?? '');
+            onChange({ triggerType, event });
           }}
-          className="w-full border border-gray-300 rounded px-3 py-2"
         >
-          <option value="system">System</option>
-          <option value="custom">Custom Event</option>
-        </select>
-      </div>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="system">System</SelectItem>
+            <SelectItem value="custom">Custom Event</SelectItem>
+          </SelectContent>
+        </Select>
+      </Field>
 
-      <div>
-        <label className="block text-sm text-gray-700 mb-1">Event</label>
+      <Field label="Event">
         {config.triggerType === 'system' ? (
-          <select
+          <Select
             value={config.event}
-            onChange={(e) => onUpdate({ ...config, event: e.target.value as TriggerEvent })}
-            className="w-full border border-gray-300 rounded px-3 py-2"
+            onValueChange={(v) => onChange({ ...config, event: v as TriggerEvent })}
           >
-            {SYSTEM_EVENTS.map((event) => (
-              <option key={event} value={event}>
-                {formatTriggerEvent(event)}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SYSTEM_EVENTS.map((event) => (
+                <SelectItem key={event} value={event}>
+                  {formatTriggerEvent(event)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : eventNames.length === 0 ? (
+          <p className="text-sm text-gray-500">No events tracked yet</p>
         ) : (
-          <select
+          <Select
             value={config.event}
-            onChange={(e) => onUpdate({ ...config, event: e.target.value as TriggerEvent })}
-            className="w-full border border-gray-300 rounded px-3 py-2"
+            onValueChange={(v) => onChange({ ...config, event: v as TriggerEvent })}
           >
-            {eventNames.length === 0 ? (
-              <option value="" disabled>No events tracked yet</option>
-            ) : (
-              eventNames.map((name) => (
-                <option key={name} value={name}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {eventNames.map((name) => (
+                <SelectItem key={name} value={name}>
                   {formatTriggerEvent(name)}
-                </option>
-              ))
-            )}
-          </select>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
-      </div>
+      </Field>
 
       <p className="text-xs text-gray-500">
         {config.triggerType === 'system'
@@ -130,38 +189,36 @@ function TriggerConfig({
 
 function WaitConfig({
   config,
-  onUpdate,
+  onChange,
 }: {
   config: WaitNodeData['config'];
-  onUpdate: (config: WaitNodeData['config']) => void;
+  onChange: (config: WaitNodeData['config']) => void;
 }) {
   return (
-    <div>
-      <label className="block text-sm text-gray-700 mb-1">Wait Duration (hours)</label>
-      <input
+    <Field label="Wait Duration (hours)">
+      <Input
         type="number"
         value={config.hours}
-        onChange={(e) => onUpdate({ hours: parseInt(e.target.value, 10) || 1 })}
+        onChange={(e) => onChange({ hours: parseInt(e.target.value, 10) || 1 })}
         min={1}
         max={720}
-        className="w-full border border-gray-300 rounded px-3 py-2"
       />
-      <p className="text-xs text-gray-500 mt-1">
+      <p className="text-xs text-gray-500">
         {config.hours >= 24
           ? `= ${Math.floor(config.hours / 24)} days ${config.hours % 24} hours`
           : `= ${config.hours} hours`}
       </p>
-    </div>
+    </Field>
   );
 }
 
 function BranchConfig({
   config,
-  onUpdate,
+  onChange,
   userColumns,
 }: {
   config: BranchNodeData['config'];
-  onUpdate: (config: BranchNodeData['config']) => void;
+  onChange: (config: BranchNodeData['config']) => void;
   userColumns: UserColumn[];
 }) {
   const operators = ['=', '!=', 'exists', 'not_exists'] as const;
@@ -169,48 +226,49 @@ function BranchConfig({
 
   return (
     <div className="space-y-3">
-      <div>
-        <label className="block text-sm text-gray-700 mb-1">Attribute</label>
-        <select
+      <Field label="Attribute">
+        <Select
           value={config.user_column}
-          onChange={(e) => onUpdate({ ...config, user_column: e.target.value, compare_value: '' })}
-          className="w-full border border-gray-300 rounded px-3 py-2"
+          onValueChange={(v) => onChange({ ...config, user_column: v, compare_value: '' })}
         >
-          <option value="">Select an attribute...</option>
-          {userColumns.map((col) => (
-            <option key={col.name} value={col.name}>
-              {col.name}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div>
-        <label className="block text-sm text-gray-700 mb-1">Operator</label>
-        <select
+          <SelectTrigger>
+            <SelectValue placeholder="Select an attribute..." />
+          </SelectTrigger>
+          <SelectContent>
+            {userColumns.map((col) => (
+              <SelectItem key={col.name} value={col.name}>
+                {col.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field label="Operator">
+        <Select
           value={config.operator}
-          onChange={(e) =>
-            onUpdate({ ...config, operator: e.target.value as typeof config.operator })
-          }
-          className="w-full border border-gray-300 rounded px-3 py-2"
+          onValueChange={(v) => onChange({ ...config, operator: v as typeof config.operator })}
         >
-          {operators.map((op) => (
-            <option key={op} value={op}>
-              {op}
-            </option>
-          ))}
-        </select>
-      </div>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {operators.map((op) => (
+              <SelectItem key={op} value={op}>
+                {op}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
       {needsValue && config.user_column && (
-        <div>
-          <label className="block text-sm text-gray-700 mb-1">Compare Value</label>
-          <input
+        <Field label="Compare Value">
+          <Input
             type="text"
             value={config.compare_value || ''}
-            onChange={(e) => onUpdate({ ...config, compare_value: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2"
+            onChange={(e) => onChange({ ...config, compare_value: e.target.value })}
             placeholder="Enter value"
           />
-        </div>
+        </Field>
       )}
     </div>
   );
@@ -218,48 +276,40 @@ function BranchConfig({
 
 function SendConfig({
   config,
-  onUpdate,
+  onChange,
 }: {
   config: SendNodeData['config'];
-  onUpdate: (config: SendNodeData['config']) => void;
+  onChange: (config: SendNodeData['config']) => void;
 }) {
   return (
     <div className="space-y-3">
-      <div>
-        <label className="block text-sm text-gray-700 mb-1">
-          Title <span className="text-gray-400">({config.title.length}/50)</span>
-        </label>
-        <input
+      <Field label={`Title (${config.title.length}/50)`}>
+        <Input
           type="text"
           value={config.title}
-          onChange={(e) => onUpdate({ ...config, title: e.target.value.slice(0, 50) })}
+          onChange={(e) => onChange({ ...config, title: e.target.value.slice(0, 50) })}
           maxLength={50}
-          className="w-full border border-gray-300 rounded px-3 py-2"
         />
-      </div>
-      <div>
-        <label className="block text-sm text-gray-700 mb-1">
-          Body <span className="text-gray-400">({config.body.length}/150)</span>
-        </label>
-        <textarea
+      </Field>
+      <Field label={`Body (${config.body.length}/150)`}>
+        <Textarea
           value={config.body}
-          onChange={(e) => onUpdate({ ...config, body: e.target.value.slice(0, 150) })}
+          onChange={(e) => onChange({ ...config, body: e.target.value.slice(0, 150) })}
           maxLength={150}
           rows={3}
-          className="w-full border border-gray-300 rounded px-3 py-2"
         />
-      </div>
+      </Field>
     </div>
   );
 }
 
 function FilterConfig({
   config,
-  onUpdate,
+  onChange,
   userColumns,
 }: {
   config: FilterNodeData['config'];
-  onUpdate: (config: FilterNodeData['config']) => void;
+  onChange: (config: FilterNodeData['config']) => void;
   userColumns: UserColumn[];
 }) {
   const operators = ['=', '!=', '>', '<'] as const;
@@ -274,53 +324,58 @@ function FilterConfig({
 
   return (
     <div className="space-y-3">
-      <div>
-        <label className="block text-sm text-gray-700 mb-1">Attribute</label>
-        <select
+      <Field label="Attribute">
+        <Select
           value={config.attribute_key}
-          onChange={(e) => onUpdate({ ...config, attribute_key: e.target.value, compare_value: '' })}
-          className="w-full border border-gray-300 rounded px-3 py-2"
+          onValueChange={(v) => onChange({ ...config, attribute_key: v, compare_value: '' })}
         >
-          <option value="">Select an attribute...</option>
-          {userColumns.map((col) => (
-            <option key={col.name} value={col.name}>
-              {col.name}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div>
-        <label className="block text-sm text-gray-700 mb-1">Operator</label>
-        <select
-          value={config.operator}
-          onChange={(e) =>
-            onUpdate({ ...config, operator: e.target.value as typeof config.operator })
-          }
-          className="w-full border border-gray-300 rounded px-3 py-2"
-        >
-          {operators.map((op) => (
-            <option key={op} value={op}>
-              {op}
-            </option>
-          ))}
-        </select>
-      </div>
-      {config.attribute_key && selectedColumn && (
-        <div>
-          <label className="block text-sm text-gray-700 mb-1">Value</label>
-          <select
-            value={String(config.compare_value ?? '')}
-            onChange={(e) => onUpdate({ ...config, compare_value: parseValue(e.target.value) })}
-            className="w-full border border-gray-300 rounded px-3 py-2"
-          >
-            <option value="">Select a value...</option>
-            {selectedColumn.values.map((val) => (
-              <option key={val} value={val}>
-                {val}
-              </option>
+          <SelectTrigger>
+            <SelectValue placeholder="Select an attribute..." />
+          </SelectTrigger>
+          <SelectContent>
+            {userColumns.map((col) => (
+              <SelectItem key={col.name} value={col.name}>
+                {col.name}
+              </SelectItem>
             ))}
-          </select>
-        </div>
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field label="Operator">
+        <Select
+          value={config.operator}
+          onValueChange={(v) => onChange({ ...config, operator: v as typeof config.operator })}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {operators.map((op) => (
+              <SelectItem key={op} value={op}>
+                {op}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      {config.attribute_key && selectedColumn && (
+        <Field label="Value">
+          <Select
+            value={String(config.compare_value ?? '')}
+            onValueChange={(v) => onChange({ ...config, compare_value: parseValue(v) })}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Select a value..." />
+            </SelectTrigger>
+            <SelectContent>
+              {selectedColumn.values.map((val) => (
+                <SelectItem key={val} value={val}>
+                  {val}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
       )}
     </div>
   );
