@@ -11,6 +11,18 @@ declare module "sst" {
       "type": "sst.aws.Function"
       "url": string
     }
+    "EnrollmentDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "EnrollmentDispatcher": {
+      "name": string
+      "type": "sst.aws.Function"
+    }
+    "EnrollmentQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "Frontend": {
       "type": "sst.aws.StaticSite"
       "url": string

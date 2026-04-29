@@ -2,6 +2,7 @@
   "name": "notify",
   "description": "A React application with Vite and SST",
   "dependencies": {
+    "@aws-sdk/client-sqs": "^3.1038.0",
     "@dagrejs/dagre": "^3.0.0",
     "@neondatabase/serverless": "^1.1.0",
     "@radix-ui/react-dialog": "^1.1.15",

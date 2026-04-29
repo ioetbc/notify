@@ -24,7 +24,6 @@ export default $config({
       },
     });
 
-    // Admin API - internal endpoints for the admin portal (workflow builder, etc.)
     const adminApi = new sst.aws.Function('AdminApi', {
       handler: 'apps/server/functions/admin/index.handler',
       link: [db],
@@ -40,8 +39,7 @@ export default $config({
       },
     });
 
-    // Public API - customer-facing endpoints (user attributes, events, etc.)
-    const publicApi = new sst.aws.Function('PublicApi', {
+    new sst.aws.Function('PublicApi', {
       handler: 'apps/server/functions/public/index.handler',
       link: [db],
       url: {
@@ -51,6 +49,40 @@ export default $config({
           allowHeaders: ['Content-Type', 'Authorization', 'X-Customer-Id'],
         },
       },
+    });
+
+    const enrollmentDlq = new sst.aws.Queue('EnrollmentDLQ', {
+      transform: {
+        queue: { messageRetentionSeconds: 60 * 60 * 24 * 14 },
+      },
+    });
+
+    const enrollmentQueue = new sst.aws.Queue('EnrollmentQueue', {
+      visibilityTimeout: '90 seconds',
+      dlq: { queue: enrollmentDlq.arn, retry: 3 },
+    });
+
+    enrollmentQueue.subscribe(
+      {
+        handler: 'apps/server/functions/worker/index.handler',
+        link: [db],
+        timeout: '60 seconds',
+        nodejs: { install: ['expo-server-sdk'] },
+      },
+      {
+        batch: { size: 10, partialResponses: true },
+      }
+    );
+
+    const dispatcher = new sst.aws.Function('EnrollmentDispatcher', {
+      handler: 'apps/server/functions/dispatcher/index.handler',
+      link: [db, enrollmentQueue],
+      timeout: '30 seconds',
+    });
+
+    new sst.aws.CronV2('EnrollmentCron', {
+      schedule: 'rate(1 hour)',
+      function: dispatcher,
     });
 
     new sst.aws.StaticSite('Frontend', {
