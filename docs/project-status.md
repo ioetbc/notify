@@ -1,9 +1,12 @@
 ## Notify — Project Status (2026-04-29)
 
 ### 1. Infrastructure
-- **SST on AWS** — fully configured with two Lambda functions (Admin API, Public API) and a static site for the frontend
+- **SST on AWS** — Admin API + Public API Lambdas, dispatcher + worker Lambdas, EventBridge cron, two SQS queues, and a static site for the frontend
 - **Neon PostgreSQL 17** — managed DB provisioned via SST, Drizzle ORM + migrations in place
 - **3 migrations applied** — schema is stable and deployed
+- **EnrollmentQueue (SQS)** — 90s visibility timeout, batch size 10 with partial-batch responses, redrives to DLQ after 3 retries
+- **EnrollmentDLQ (SQS)** — 14-day message retention for poisoned enrollments
+- **EnrollmentCron (CronV2)** — `rate(1 hour)` trigger that invokes the dispatcher Lambda
 
 ### 2. Database Schema (Drizzle)
 All core tables are defined and migrated:
@@ -39,11 +42,15 @@ All core tables are defined and migrated:
 
 ### 5. Execution Engine & Notification Delivery
 - **`EnrollmentWalker`** (`apps/server/services/enrollment/enrollment.ts`) advances users through workflows
-  - `processReadyEnrollments()` — polls `workflow_enrollment` for rows where `status='active'` and `process_at <= now()`
   - `processEnrollment(enrollmentId)` — loads the workflow's steps and edges, then executes the current step
   - Handles all step types: `send`, `branch`, `filter`, `wait`, `exit`
-- **Manual trigger** — `POST /enrollments/process` on the Admin API invokes the walker. No cron, EventBridge rule, or SQS queue yet — invocation is purely on-demand.
-- **Push delivery via Expo** — `expo-server-sdk` is wired into the walker's `onSend` callback (`apps/server/functions/admin/index.ts`)
+- **Dispatcher Lambda** (`apps/server/functions/dispatcher/index.ts`) — invoked hourly by `EnrollmentCron`
+  - Atomically claims up to 100 ready enrollments via `UPDATE ... FOR UPDATE SKIP LOCKED`, flipping them to `status='processing'` to prevent double-dispatch
+  - Fans out claimed IDs to `EnrollmentQueue` using `SendMessageBatchCommand` (batches of 10)
+- **Worker Lambda** (`apps/server/functions/worker/index.ts`) — SQS-subscribed consumer
+  - Processes each message through the walker; failed messages return as `batchItemFailures` so SQS only retries the failed records
+  - Three retries before redrive to `EnrollmentDLQ`
+- **Push delivery via Expo** — `sendPushNotification` (`apps/server/services/enrollment/send.ts`) is wired into the worker's `onSend` callback
   - Filters tokens through `Expo.isExpoPushToken()` before dispatch
   - Calls `expo.sendPushNotificationsAsync()` and logs the returned tickets
 - **Push token storage** — `push_token` table (unique on `user_id, token`) with full repo/service/route layers
@@ -75,11 +82,35 @@ All core tables are defined and migrated:
 
 ---
 
-### What Does NOT Exist Yet 
+### What Does NOT Exist Yet
 
-- **No automatic walker invocation** — `processReadyEnrollments()` is only callable via the `POST /enrollments/process` admin endpoint. No EventBridge cron, no SQS queue, no scheduled worker Lambda — nothing advances enrollments without a manual HTTP call.
-- **No fault tolerance** — the walker processes enrollments synchronously inside one Lambda invocation; no retry logic, no DLQ, no idempotency guard if a step partially completes (e.g. notification sent but `current_step_id` not updated).
+**Auth & multi-tenancy**
+- **API key authentication** — `customer.apiKey` exists but is never validated; the Public API trusts the `x-customer-id` header. The client hardcodes a dev customer id in `apps/client/lib/api.ts`.
+- **Customer onboarding / signup / login** — no auth UI, session, or signup flow. The product currently assumes a single seeded customer.
+- **Tenant isolation at the query layer** — repositories scope by `customerId` from the header but nothing prevents a forged header from reading another tenant's data.
+
+**Notification correctness & observability**
+- **No idempotency guard inside steps** — a worker that partially completes a step (notification sent but `current_step_id` not yet updated) will re-send on SQS retry. Step execution is not transactional.
 - **No Expo receipt polling** — tickets returned by `sendPushNotificationsAsync` are logged but never reconciled against Expo's receipts endpoint, so delivery status, invalid tokens, and provider errors are invisible.
-- **API key authentication** — `apiKey` column exists on customer but is never validated; everything uses `x-customer-id` header
-- **Analytics / metrics** — no notification log table, no per-customer delivery stats, no dashboards
-- **Campaign / transactional / loop distinction** — the home page references these concepts but they're backed by mock data, not the workflow system
+- **`communication_log` is send-only metadata** — table captures the rendered config but has no status, error, ticket id, or receipt fields. There's no way to answer "did this notification deliver?".
+- **Hourly dispatch granularity** — `EnrollmentCron` runs at `rate(1 hour)`, so a wait step set to "1 hour" can fire up to ~1 hour late. Sub-hour precision needs a faster cron or per-enrollment scheduling.
+- **No DLQ alerting** — messages land in `EnrollmentDLQ` after 3 retries but nothing alerts on depth or replays them.
+
+**Journey-engine features called out in north-star**
+- **"Has event been received" condition** — branch operators today only inspect user attributes (`=`, `!=`, `exists`, `not_exists`). The north-star example journey ("has `purchase_completed` been received?") cannot be expressed.
+- **Deep links on send steps** — `SendConfig` accepts `title` + `body` only; no `deep_link` / `url` field, no UI for it in the canvas.
+- **Journey templates** — no scaffolded starter journeys for new customers.
+
+**Product surfaces (frontend)**
+- **Campaigns / transactional / loops pages are stubs** — `NewCampaign`, `CampaignDetail`, `NewTransactional`, `TransactionalDetail`, `NewLoop` are placeholder components. The home page lists them with mock data from `apps/client/data/mock-data.ts`.
+- **Broken `/canvas2` routes** — `App.tsx` still imports `NewCanvas2Page` / `EditCanvas2Page` from `pages/canvas2`, but that directory no longer exists. The build will fail until the routes are removed.
+- **No analytics dashboard** — home page columns (Sends / Opens / Clicks / Status) are populated from mocks; no real per-journey or per-customer delivery stats.
+- **No settings area** — no billing/tier display, no MAU usage meter, no team management, no API key rotation UI.
+- **No developer integration surface** — no in-app code snippets, SDK docs, or "test your integration" panel to help a customer's developer wire up token registration and event firing.
+
+**Billing & metering**
+- **No MAU tracking** — the north-star prices on monthly active users. No table, no rollup job, no enforcement of the Free / Starter / Growth / Scale caps.
+- **No billing integration** — no Stripe or other payment provider wired up.
+
+**Campaign / transactional / loop semantics**
+- The home page distinguishes these concepts but the `workflow` table doesn't — every workflow has the same shape regardless of which bucket it appears in. Either the data model needs a discriminator column or the frontend distinction needs to collapse.

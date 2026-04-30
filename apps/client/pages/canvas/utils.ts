@@ -3,7 +3,6 @@ import { match } from 'ts-pattern';
 import type {
   StepType,
   TriggerType,
-  TriggerEvent,
   StepNodeData,
   TriggerNodeData,
   WaitNodeData,
@@ -11,7 +10,6 @@ import type {
   SendNodeData,
   FilterNodeData,
   ExitNodeData,
-  StepConfig,
 } from './types';
 import { getLayoutedElements } from './layout';
 
@@ -99,82 +97,6 @@ export function createInitialWorkflow(): { nodes: CanvasNode[]; edges: Edge[] } 
       markerEnd: { type: MarkerType.ArrowClosed },
     },
   ];
-
-  return getLayoutedElements(nodes, edges);
-}
-
-export interface ApiStep {
-  id: string;
-  type: 'wait' | 'branch' | 'send' | 'filter' | 'exit';
-  config: StepConfig;
-}
-
-export interface ApiEdge {
-  id: string;
-  source: string;
-  target: string;
-  handle: boolean | null;
-}
-
-export function dbToCanvas(
-  workflow: { id: string; name: string; triggerType: TriggerType; triggerEvent: TriggerEvent },
-  steps: ApiStep[],
-  apiEdges: ApiEdge[]
-): { nodes: CanvasNode[]; edges: Edge[] } {
-  const nodes: CanvasNode[] = [];
-  const edges: Edge[] = [];
-
-  nodes.push({
-    id: 'trigger',
-    type: 'trigger' as const,
-    position: { x: 0, y: 0 },
-    data: {
-      type: 'trigger' as const,
-      config: { triggerType: workflow.triggerType, event: workflow.triggerEvent },
-      label: 'Trigger',
-    },
-  });
-
-  for (const s of steps) {
-    const label = s.type.charAt(0).toUpperCase() + s.type.slice(1);
-    nodes.push({
-      id: s.id,
-      type: s.type,
-      position: { x: 0, y: 0 },
-      data: { type: s.type, config: s.config, label } as StepNodeData,
-    });
-  }
-
-  const stepsWithIncoming = new Set<string>();
-
-  for (const e of apiEdges) {
-    const sourceHandle = e.handle === true ? 'yes' : e.handle === false ? 'no' : undefined;
-    const label = e.handle === true ? 'Yes' : e.handle === false ? 'No' : undefined;
-    edges.push({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      sourceHandle,
-      animated: true,
-      markerEnd: { type: MarkerType.ArrowClosed },
-      ...(label && { label }),
-    });
-    stepsWithIncoming.add(e.target);
-  }
-
-  // Connect trigger to root step (no incoming edges)
-  for (const s of steps) {
-    if (!stepsWithIncoming.has(s.id)) {
-      edges.push({
-        id: `trigger-${s.id}`,
-        source: 'trigger',
-        target: s.id,
-        animated: true,
-        markerEnd: { type: MarkerType.ArrowClosed },
-      });
-      break;
-    }
-  }
 
   return getLayoutedElements(nodes, edges);
 }

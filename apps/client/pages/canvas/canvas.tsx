@@ -5,8 +5,8 @@ import {
   Background,
   Panel,
   addEdge,
-  useNodesState,
-  useEdgesState,
+  applyNodeChanges,
+  applyEdgeChanges,
   useReactFlow,
   type Connection,
   type Edge,
@@ -27,23 +27,22 @@ import type {
   BranchNodeData,
   SendNodeData,
 } from './types';
-import { createNodeData, createInitialWorkflow, getNodeId, type CanvasNode } from './utils';
+import { createNodeData, getNodeId, type CanvasNode } from './utils';
 import { ConfigPanel } from './config-panel';
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useUserColumns, useEventNames, useWorkflow, useSaveWorkflow, usePublishWorkflow } from './hooks';
+import { useUserColumns, useEventNames } from './hooks';
+import { useWorkflowSession } from './workflow-session';
 
 type Snapshot = { nodes: CanvasNode[]; edges: Edge[] };
 
 function CanvasInner({ workflowId }: { workflowId?: string }) {
   const { screenToFlowPosition } = useReactFlow();
-  const initial = workflowId ? { nodes: [], edges: [] } : createInitialWorkflow();
-  const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(initial.nodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initial.edges);
+  const session = useWorkflowSession(workflowId);
+  const { nodes, edges, applyEdit } = session;
+
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [workflowName, setWorkflowName] = useState('Untitled Workflow');
-  const [workflowStatus, setWorkflowStatus] = useState<'draft' | 'active'>('draft');
 
   const [past, setPast] = useState<Snapshot[]>([]);
   const [future, setFuture] = useState<Snapshot[]>([]);
@@ -60,22 +59,20 @@ function CanvasInner({ workflowId }: { workflowId?: string }) {
       if (p.length === 0) return p;
       const prev = p[p.length - 1];
       setFuture((f) => [...f, stateRef.current]);
-      setNodes(prev.nodes);
-      setEdges(prev.edges);
+      applyEdit({ nodes: prev.nodes, edges: prev.edges });
       return p.slice(0, -1);
     });
-  }, [setNodes, setEdges]);
+  }, [applyEdit]);
 
   const redo = useCallback(() => {
     setFuture((f) => {
       if (f.length === 0) return f;
       const next = f[f.length - 1];
       setPast((p) => [...p, stateRef.current]);
-      setNodes(next.nodes);
-      setEdges(next.edges);
+      applyEdit({ nodes: next.nodes, edges: next.edges });
       return f.slice(0, -1);
     });
-  }, [setNodes, setEdges]);
+  }, [applyEdit]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -92,33 +89,23 @@ function CanvasInner({ workflowId }: { workflowId?: string }) {
     (changes: NodeChange<CanvasNode>[]) => {
       const significant = changes.some((c) => c.type === 'remove' || (c.type === 'position' && c.dragging === false));
       if (significant) commit();
-      onNodesChange(changes);
+      applyEdit({ nodes: applyNodeChanges(changes, stateRef.current.nodes) });
     },
-    [onNodesChange, commit]
+    [applyEdit, commit]
   );
 
   const handleEdgesChange = useCallback(
     (changes: EdgeChange[]) => {
       if (changes.some((c) => c.type === 'remove')) commit();
-      onEdgesChange(changes);
+      applyEdit({ edges: applyEdgeChanges(changes, stateRef.current.edges) });
     },
-    [onEdgesChange, commit]
+    [applyEdit, commit]
   );
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
 
   const { data: userColumns = [] } = useUserColumns();
   const { data: eventNames = [] } = useEventNames();
-
-  useWorkflow(workflowId, (name, loadedNodes, loadedEdges, status) => {
-    setWorkflowName(name);
-    setNodes(loadedNodes);
-    setEdges(loadedEdges);
-    setWorkflowStatus(status === 'active' ? 'active' : 'draft');
-  });
-
-  const saveMutation = useSaveWorkflow(workflowId, workflowName, nodes, edges);
-  const publishMutation = usePublishWorkflow(workflowId);
 
   const isValidConnection = useCallback(
     (connection: Connection | Edge) => {
@@ -166,9 +153,9 @@ function CanvasInner({ workflowId }: { workflowId?: string }) {
         ...(label && { label }),
       };
       commit();
-      setEdges((eds) => addEdge(edge, eds));
+      applyEdit({ edges: addEdge(edge, stateRef.current.edges) });
     },
-    [setEdges, commit]
+    [applyEdit, commit]
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {
@@ -196,9 +183,9 @@ function CanvasInner({ workflowId }: { workflowId?: string }) {
       };
 
       commit();
-      setNodes((nds) => [...nds, newNode]);
+      applyEdit({ nodes: [...stateRef.current.nodes, newNode] });
     },
-    [screenToFlowPosition, setNodes, commit]
+    [screenToFlowPosition, applyEdit, commit]
   );
 
   const onNodeClick = useCallback(
@@ -215,17 +202,17 @@ function CanvasInner({ workflowId }: { workflowId?: string }) {
   const updateNodeData = useCallback(
     (nodeId: string, newConfig: TriggerNodeData['config'] | WaitNodeData['config'] | BranchNodeData['config'] | SendNodeData['config']) => {
       commit();
-      setNodes((nds) =>
-        nds.map((node) => {
+      applyEdit({
+        nodes: stateRef.current.nodes.map((node) => {
           if (node.id === nodeId) {
             const updatedData = { ...node.data, config: newConfig } as StepNodeData;
             return { ...node, data: updatedData } as CanvasNode;
           }
           return node;
-        })
-      );
+        }),
+      });
     },
-    [setNodes, commit]
+    [applyEdit, commit]
   );
 
   return (
@@ -234,37 +221,40 @@ function CanvasInner({ workflowId }: { workflowId?: string }) {
         {/* Toolbar */}
         <div className="absolute top-0 left-0 right-0 h-14 px-4 flex items-center justify-end z-10 pointer-events-none [&_input]:pointer-events-auto [&_button]:pointer-events-auto [&_span]:pointer-events-auto">
           <div className="flex items-center gap-3">
+            {session.lastError && (
+              <span className="text-sm text-red-600" role="alert">
+                {session.lastError}
+              </span>
+            )}
             <input
               type="text"
               placeholder="Workflow name"
               className="text-lg font-semibold border-none outline-none bg-transparent text-right"
-              value={workflowName}
-              onChange={(e) => setWorkflowName(e.target.value)}
+              value={session.name}
+              onChange={(e) => session.setName(e.target.value)}
             />
             <Select
-              value={workflowStatus}
+              value={session.status}
               onValueChange={(value) => {
-                if (value === 'active' && workflowStatus !== 'active' && workflowId) {
-                  publishMutation.mutate(undefined, {
-                    onSuccess: () => setWorkflowStatus('active'),
-                  });
+                if (value === 'active' && session.status !== 'active' && workflowId) {
+                  void session.publish();
                 }
               }}
-              disabled={!workflowId || publishMutation.isPending || workflowStatus === 'active'}
+              disabled={!workflowId || session.publishState === 'pending' || session.status === 'active'}
             >
               <SelectTrigger className="w-32">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="draft" disabled={workflowStatus === 'active'}>Draft</SelectItem>
+                <SelectItem value="draft" disabled={session.status === 'active'}>Draft</SelectItem>
                 <SelectItem value="active">Active</SelectItem>
               </SelectContent>
             </Select>
             <Button
-              onClick={() => saveMutation.mutate()}
-              disabled={saveMutation.isPending}
+              onClick={() => void session.save()}
+              disabled={session.saveState === 'pending'}
             >
-              {saveMutation.isPending ? 'Saving...' : 'Save'}
+              {session.saveState === 'pending' ? 'Saving...' : 'Save'}
             </Button>
           </div>
         </div>
