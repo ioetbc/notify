@@ -32,6 +32,12 @@ export const workflowStatusEnum = pgEnum("workflow_status", [
   "archived",
 ]);
 
+export const communicationStatusEnum = pgEnum("communication_status", [
+  "claimed",
+  "sent",
+  "failed",
+]);
+
 
 export const customer = pgTable("customer", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -138,20 +144,28 @@ export const workflowEnrollment = pgTable(
 );
 
 
-export const communicationLog = pgTable("communication_log", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  enrollmentId: uuid("enrollment_id")
-    .notNull()
-    .references(() => workflowEnrollment.id, { onDelete: "cascade" }),
-  stepId: uuid("step_id")
-    .notNull()
-    .references(() => step.id, { onDelete: "cascade" }),
-  userId: uuid("user_id")
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
-  config: jsonb("config").$type<SendConfig>().notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
-});
+export const communicationLog = pgTable(
+  "communication_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    enrollmentId: uuid("enrollment_id")
+      .notNull()
+      .references(() => workflowEnrollment.id, { onDelete: "cascade" }),
+    stepId: uuid("step_id")
+      .notNull()
+      .references(() => step.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    config: jsonb("config").$type<SendConfig>().notNull(),
+    status: communicationStatusEnum("status").notNull().default("sent"),
+    expoTickets: jsonb("expo_tickets").$type<unknown[]>(),
+    error: text("error"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [unique().on(table.enrollmentId, table.stepId)]
+);
 
 export const event = pgTable("event", {
   id: uuid("id").primaryKey().defaultRandom(),

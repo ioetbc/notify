@@ -35,6 +35,8 @@ export async function createTestDb() {
     "0001_nosy_gorgon.sql",
     "0002_orange_goliath.sql",
     "0003_sour_electro.sql",
+    "0004_rapid_odin.sql",
+    "0005_giant_silver_samurai.sql",
   ];
 
   for (const file of migrations) {

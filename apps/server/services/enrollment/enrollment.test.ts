@@ -649,6 +649,114 @@ describe("processReadyEnrollments", () => {
   });
 });
 
+// ── idempotency ─────────────────────────────────────────────────────────
+
+describe("send idempotency", () => {
+  it("happy path: claims, calls onSend once, marks row sent with tickets", async () => {
+    const stepId = "00000000-0000-0000-0000-000000000010";
+    const { enrollmentId } = await seedWorkflow(db, {
+      steps: [
+        { id: stepId, type: "send", config: { title: "Hi", body: "body" } },
+      ],
+    });
+
+    const tickets = [{ status: "ok", id: "ticket-1" }];
+    const walker = new EnrollmentWalker({
+      db,
+      onSend: async (payload) => {
+        sendCalls.push(payload);
+        return tickets;
+      },
+      observe: (event) => { events.push(event); },
+    });
+
+    await walker.processEnrollment(enrollmentId);
+
+    expect(sendCalls).toHaveLength(1);
+
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(1);
+    expect(logs[0].status).toBe("sent");
+    expect(logs[0].expoTickets).toEqual(tickets);
+    expect(logs[0].sentAt).toBeInstanceOf(Date);
+    expect(logs[0].error).toBeNull();
+  });
+
+  it("retry path: pre-existing log row makes processEnrollment skip onSend", async () => {
+    const stepId = "00000000-0000-0000-0000-000000000010";
+    const { enrollmentId, userId } = await seedWorkflow(db, {
+      steps: [
+        { id: stepId, type: "send", config: { title: "Hi", body: "body" } },
+      ],
+    });
+
+    // Pre-seed a row as if a prior delivery already claimed (and sent) this step
+    await db.insert(communicationLog).values({
+      enrollmentId,
+      stepId,
+      userId,
+      config: { title: "Hi", body: "body" },
+      status: "sent",
+      sentAt: new Date(),
+    });
+
+    const walker = createWalker();
+    await walker.processEnrollment(enrollmentId);
+
+    // onSend should not have been called a second time
+    expect(sendCalls).toHaveLength(0);
+
+    // Still only one row (unique constraint + on conflict do nothing)
+    const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logs).toHaveLength(1);
+
+    // Walker still advanced past the send and completed
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("completed");
+    expect(enrollment.currentStepId).toBeNull();
+  });
+
+  it("failure path: onSend throws → row marked failed → second invocation skips onSend", async () => {
+    const stepId = "00000000-0000-0000-0000-000000000010";
+    const { enrollmentId } = await seedWorkflow(db, {
+      steps: [
+        { id: stepId, type: "send", config: { title: "Hi", body: "body" } },
+      ],
+    });
+
+    let attempts = 0;
+    const walker = new EnrollmentWalker({
+      db,
+      onSend: async (payload) => {
+        attempts++;
+        sendCalls.push(payload);
+        throw new Error("expo down");
+      },
+      observe: (event) => { events.push(event); },
+    });
+
+    await expect(walker.processEnrollment(enrollmentId)).rejects.toThrow("expo down");
+    expect(attempts).toBe(1);
+
+    const logsAfterFail = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logsAfterFail).toHaveLength(1);
+    expect(logsAfterFail[0].status).toBe("failed");
+    expect(logsAfterFail[0].error).toBe("expo down");
+
+    // Second invocation: onSend must not be called again (at-most-once)
+    await walker.processEnrollment(enrollmentId);
+    expect(attempts).toBe(1);
+
+    const logsAfterRetry = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(logsAfterRetry).toHaveLength(1);
+    expect(logsAfterRetry[0].status).toBe("failed");
+
+    // Walker advanced past the send on the retry
+    const [enrollment] = await db.select().from(workflowEnrollment).where(eq(workflowEnrollment.id, enrollmentId));
+    expect(enrollment.status).toBe("completed");
+  });
+});
+
 // ── observe events ──────────────────────────────────────────────────────
 
 describe("observe events", () => {

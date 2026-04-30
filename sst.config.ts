@@ -81,7 +81,7 @@ export default $config({
     });
 
     new sst.aws.CronV2('EnrollmentCron', {
-      schedule: 'rate(10 minute)',
+      schedule: 'rate(1 minute)',
       function: dispatcher,
     });
 

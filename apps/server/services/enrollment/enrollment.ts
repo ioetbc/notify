@@ -27,7 +27,7 @@ type SendHandler = (payload: {
   enrollmentId: string;
   stepId: string;
   config: SendConfig;
-}) => Promise<void>;
+}) => Promise<unknown[] | undefined | void>;
 
 type WalkResult =
   | { action: "continue"; nextStepId: string }
@@ -216,17 +216,38 @@ export class EnrollmentWalker {
     return updated;
   }
 
-  private async insertCommunicationLog(values: {
+  private async claimCommunicationLog(values: {
     enrollmentId: string;
     stepId: string;
     userId: string;
     config: SendConfig;
   }) {
-    const [row] = await this.db
+    const rows = await this.db
       .insert(communicationLog)
-      .values(values)
-      .returning();
-    return row;
+      .values({ ...values, status: "claimed" })
+      .onConflictDoNothing({
+        target: [communicationLog.enrollmentId, communicationLog.stepId],
+      })
+      .returning({ id: communicationLog.id });
+    return rows[0] ?? null;
+  }
+
+  private async markCommunicationLogSent(logId: string, tickets: unknown[] | undefined) {
+    await this.db
+      .update(communicationLog)
+      .set({
+        status: "sent",
+        expoTickets: tickets ?? null,
+        sentAt: new Date(),
+      })
+      .where(eq(communicationLog.id, logId));
+  }
+
+  private async markCommunicationLogFailed(logId: string, error: string) {
+    await this.db
+      .update(communicationLog)
+      .set({ status: "failed", error })
+      .where(eq(communicationLog.id, logId));
   }
 
   async processEnrollment(enrollmentId: string) {
@@ -256,19 +277,31 @@ export class EnrollmentWalker {
       if (currentStep.type === "send") {
         const config = SendConfigSchema.parse(currentStep.config);
 
-        await this.onSend({
-          userId: enrollment.userId,
+        const claimed = await this.claimCommunicationLog({
           enrollmentId: enrollment.id,
           stepId: currentStep.id,
+          userId: enrollment.userId,
           config,
         });
 
-        await this.insertCommunicationLog({
-          enrollmentId: enrollment.id,
-          stepId: currentStep.id,
-          userId: enrollment.userId,
-          config,
-        });
+        if (claimed) {
+          try {
+            const result = await this.onSend({
+              userId: enrollment.userId,
+              enrollmentId: enrollment.id,
+              stepId: currentStep.id,
+              config,
+            });
+            const tickets = Array.isArray(result) ? result : undefined;
+            await this.markCommunicationLogSent(claimed.id, tickets);
+          } catch (err) {
+            await this.markCommunicationLogFailed(
+              claimed.id,
+              err instanceof Error ? err.message : String(err)
+            );
+            throw err;
+          }
+        }
       }
 
       const result = walkStep(
