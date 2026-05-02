@@ -85,6 +85,18 @@ export default $config({
       function: dispatcher,
     });
 
+    const receiptPoller = new sst.aws.Function('ReceiptPoller', {
+      handler: 'apps/server/functions/receipt-poller/index.handler',
+      link: [db],
+      timeout: '60 seconds',
+      nodejs: { install: ['expo-server-sdk'] },
+    });
+
+    new sst.aws.CronV2('ReceiptPollerCron', {
+      schedule: 'rate(1 minute)',
+      function: receiptPoller,
+    });
+
     new sst.aws.StaticSite('Frontend', {
       build: {
         command: 'bun run build',

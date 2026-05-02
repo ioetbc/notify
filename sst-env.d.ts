@@ -36,6 +36,10 @@ declare module "sst" {
       "type": "sst.aws.Function"
       "url": string
     }
+    "ReceiptPoller": {
+      "name": string
+      "type": "sst.aws.Function"
+    }
   }
 }
 /// <reference path="sst-env.d.ts" />

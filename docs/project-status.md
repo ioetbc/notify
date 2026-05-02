@@ -3,7 +3,7 @@
 ### 1. Infrastructure
 - **SST on AWS** — Admin API + Public API Lambdas, dispatcher + worker Lambdas, EventBridge cron, two SQS queues, and a static site for the frontend
 - **Neon PostgreSQL 17** — managed DB provisioned via SST, Drizzle ORM + migrations in place
-- **3 migrations applied** — schema is stable and deployed
+- **6 migrations applied** — schema is stable and deployed
 - **EnrollmentQueue (SQS)** — 90s visibility timeout, batch size 10 with partial-batch responses, redrives to DLQ after 3 retries
 - **EnrollmentDLQ (SQS)** — 14-day message retention for poisoned enrollments
 - **EnrollmentCron (CronV2)** — `rate(1 hour)` trigger that invokes the dispatcher Lambda
@@ -54,6 +54,7 @@ All core tables are defined and migrated:
   - Filters tokens through `Expo.isExpoPushToken()` before dispatch
   - Calls `expo.sendPushNotificationsAsync()` and logs the returned tickets
 - **Push token storage** — `push_token` table (unique on `user_id, token`) with full repo/service/route layers
+- **Step idempotency guard for `send`** — `communication_log` carries a `status` (`claimed`/`sent`/`failed`) plus `expo_tickets`, `error`, `sent_at`, and a unique constraint on `(enrollment_id, step_id)`. The walker uses a claim-then-send pattern: it inserts a `claimed` row via `ON CONFLICT DO NOTHING` before calling Expo, then flips to `sent` (with tickets) or `failed` (with error). On SQS retry the claim returns no row, so `onSend` is never re-invoked — at-most-once push delivery. Stuck `claimed` rows (worker crashed mid-Expo-call) are the deliberate tradeoff and are visible in the log for future receipt polling / alerting work.
 
 ### 6. Canvas UI (React + @xyflow/react)
 - **Full visual workflow builder** with infinite canvas, pan/zoom
@@ -90,9 +91,10 @@ All core tables are defined and migrated:
 - **Tenant isolation at the query layer** — repositories scope by `customerId` from the header but nothing prevents a forged header from reading another tenant's data.
 
 **Notification correctness & observability**
-- **No idempotency guard inside steps** — a worker that partially completes a step (notification sent but `current_step_id` not yet updated) will re-send on SQS retry. Step execution is not transactional.
-- **No Expo receipt polling** — tickets returned by `sendPushNotificationsAsync` are logged but never reconciled against Expo's receipts endpoint, so delivery status, invalid tokens, and provider errors are invisible.
-- **`communication_log` is send-only metadata** — table captures the rendered config but has no status, error, ticket id, or receipt fields. There's no way to answer "did this notification deliver?".
+- **No Expo receipt polling** — tickets are now persisted on `communication_log.expo_tickets` but never reconciled against Expo's receipts endpoint, so delivery status, invalid tokens, and provider errors are invisible.
+- **Log opens and listener events for analytics** — receipts only confirm hand-off to APNs/FCM, not whether the user saw or interacted with the notification. Need a device-side pipeline: embed a `communication_log_id` in each push payload, wire `Notifications.addNotificationReceivedListener` / `addNotificationResponseReceivedListener` in the Expo app, and add a public `POST /v1/push-events` endpoint that records `received` / `opened` / `dismissed` events back onto `communication_log` (or a new `push_event` table). Open-ended — events can arrive hours or days later, or never. Prerequisite for any real Sends/Opens/Clicks analytics surface.
+- **Dead push tokens are never cleaned up** — `push_token` is one-to-many per user (intentional: same account on multiple devices = multiple valid tokens, all should receive the push), so we never overwrite or dedupe on registration. But when a token goes permanently dead (app uninstalled, notifications disabled, OS rotated the token, device wiped), Expo signals this via a `DeviceNotRegistered` error in the **receipt** (not the ticket) for any subsequent send. Today we ignore receipts entirely, so dead tokens accumulate forever and we keep wasting send calls on them — and Expo eventually penalises senders who keep blasting dead tokens. Fix lives inside the receipt-polling work: on `DeviceNotRegistered`, delete the corresponding `push_token` row. **Only** that error code triggers deletion — `InvalidCredentials` / `MessageTooBig` / `MessageRateExceeded` describe sender/config problems, not dead tokens, and must leave the row alone. After deletion, no proactive recovery is needed: the Expo client SDK fetches a new token on next app open and re-registers via the existing `POST /v1/users/:external_id/push-tokens` endpoint.
+- **Stuck `claimed` rows have no recovery path** — if a worker dies between the Expo HTTP call and the status update, the row stays `claimed` forever and the walker will not retry the send. This is the deliberate at-most-once tradeoff but warrants alerting on aged `claimed` rows.
 - **Hourly dispatch granularity** — `EnrollmentCron` runs at `rate(1 hour)`, so a wait step set to "1 hour" can fire up to ~1 hour late. Sub-hour precision needs a faster cron or per-enrollment scheduling.
 - **No DLQ alerting** — messages land in `EnrollmentDLQ` after 3 retries but nothing alerts on depth or replays them.
 

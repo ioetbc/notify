@@ -1,6 +1,7 @@
 import { addHours } from "date-fns";
 import { match } from "ts-pattern";
-import { eq, and, lte } from "drizzle-orm";
+import { eq, and, lte, inArray } from "drizzle-orm";
+import { P } from "ts-pattern";
 import type { Db } from "../../db";
 import {
   user,
@@ -8,6 +9,8 @@ import {
   stepEdge,
   workflowEnrollment,
   communicationLog,
+  dispatch,
+  pushToken,
   WaitConfigSchema,
   BranchConfigSchema,
   SendConfigSchema,
@@ -18,16 +21,23 @@ import type {
   Step,
   StepEdge,
   SendConfig,
+  NewDispatch,
 } from "../../db/schema";
+import type { DispatchAttempt } from "./send";
 
 type UserAttributes = Record<string, string | number | boolean>;
+
+export type SendHandlerResult = {
+  provider: "expo";
+  dispatches: DispatchAttempt[];
+};
 
 type SendHandler = (payload: {
   userId: string;
   enrollmentId: string;
   stepId: string;
   config: SendConfig;
-}) => Promise<unknown[] | undefined | void>;
+}) => Promise<SendHandlerResult | undefined>;
 
 type WalkResult =
   | { action: "continue"; nextStepId: string }
@@ -216,7 +226,7 @@ export class EnrollmentWalker {
     return updated;
   }
 
-  private async claimCommunicationLog(values: {
+  private async markCommunicationLogClaimed(values: {
     enrollmentId: string;
     stepId: string;
     userId: string;
@@ -232,15 +242,51 @@ export class EnrollmentWalker {
     return rows[0] ?? null;
   }
 
-  private async markCommunicationLogSent(logId: string, tickets: unknown[] | undefined) {
-    await this.db
+  private async markCommunicationLogDispatched(
+    logId: string,
+    result: SendHandlerResult | undefined
+  ) {
+    const updateLog = this.db
       .update(communicationLog)
-      .set({
-        status: "sent",
-        expoTickets: tickets ?? null,
-        sentAt: new Date(),
-      })
+      .set({ status: "dispatched", sentAt: new Date() })
       .where(eq(communicationLog.id, logId));
+
+    if (!result || result.dispatches.length === 0) {
+      await updateLog;
+    } else {
+      const rows: NewDispatch[] = result.dispatches.map((d) =>
+        match(d)
+          .with({ ackId: P.string }, (ok) => ({
+            communicationLogId: logId,
+            provider: result.provider,
+            token: ok.token,
+            ackId: ok.ackId,
+            error: null,
+            status: "dispatched" as const,
+          }))
+          .with({ error: P.nonNullable }, (err) => ({
+            communicationLogId: logId,
+            provider: result.provider,
+            token: err.token,
+            ackId: null,
+            error: err.error,
+            status: "undelivered" as const,
+          }))
+          .exhaustive()
+      );
+
+      await this.db.batch([updateLog, this.db.insert(dispatch).values(rows)]);
+    }
+
+    const deadTokens = (result?.dispatches ?? [])
+      .filter(
+        (d) => "error" in d && d.error.details?.error === "DeviceNotRegistered"
+      )
+      .map((d) => d.token);
+
+    if (deadTokens.length > 0) {
+      await this.db.delete(pushToken).where(inArray(pushToken.token, deadTokens));
+    }
   }
 
   private async markCommunicationLogFailed(logId: string, error: string) {
@@ -277,7 +323,7 @@ export class EnrollmentWalker {
       if (currentStep.type === "send") {
         const config = SendConfigSchema.parse(currentStep.config);
 
-        const claimed = await this.claimCommunicationLog({
+        const claimed = await this.markCommunicationLogClaimed({
           enrollmentId: enrollment.id,
           stepId: currentStep.id,
           userId: enrollment.userId,
@@ -292,8 +338,9 @@ export class EnrollmentWalker {
               stepId: currentStep.id,
               config,
             });
-            const tickets = Array.isArray(result) ? result : undefined;
-            await this.markCommunicationLogSent(claimed.id, tickets);
+
+            await this.markCommunicationLogDispatched(claimed.id, result);
+
           } catch (err) {
             await this.markCommunicationLogFailed(
               claimed.id,

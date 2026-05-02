@@ -9,6 +9,8 @@ import {
   stepEdge,
   workflowEnrollment,
   communicationLog,
+  dispatch,
+  pushToken,
 } from "../../db/schema";
 import type { SendConfig, StepConfig } from "../../db/schema";
 import { eq, sql } from "drizzle-orm";
@@ -660,12 +662,17 @@ describe("send idempotency", () => {
       ],
     });
 
-    const tickets = [{ status: "ok", id: "ticket-1" }];
+    const sendResult = {
+      provider: "expo" as const,
+      dispatches: [
+        { token: "ExponentPushToken[abc]", ackId: "ticket-1" },
+      ],
+    };
     const walker = new EnrollmentWalker({
       db,
       onSend: async (payload) => {
         sendCalls.push(payload);
-        return tickets;
+        return sendResult;
       },
       observe: (event) => { events.push(event); },
     });
@@ -676,10 +683,89 @@ describe("send idempotency", () => {
 
     const logs = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
     expect(logs).toHaveLength(1);
-    expect(logs[0].status).toBe("sent");
-    expect(logs[0].expoTickets).toEqual(tickets);
+    expect(logs[0].status).toBe("dispatched");
     expect(logs[0].sentAt).toBeInstanceOf(Date);
     expect(logs[0].error).toBeNull();
+
+    const dispatches = await db.select().from(dispatch).where(eq(dispatch.communicationLogId, logs[0].id));
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0].provider).toBe("expo");
+    expect(dispatches[0].token).toBe("ExponentPushToken[abc]");
+    expect(dispatches[0].status).toBe("dispatched");
+    expect(dispatches[0].ackId).toBe("ticket-1");
+    expect(dispatches[0].error).toBeNull();
+  });
+
+  it("pre-flight ack error → dispatch row written as undelivered, dead token deleted", async () => {
+    const stepId = "00000000-0000-0000-0000-000000000010";
+    const { enrollmentId, userId } = await seedWorkflow(db, {
+      steps: [{ id: stepId, type: "send", config: { title: "Hi", body: "body" } }],
+    });
+
+    const goodToken = "ExponentPushToken[good]";
+    const badToken = "ExponentPushToken[bad]";
+    await db.insert(pushToken).values([
+      { userId, token: goodToken },
+      { userId, token: badToken },
+    ]);
+
+    const walker = new EnrollmentWalker({
+      db,
+      onSend: async (payload) => {
+        sendCalls.push(payload);
+        return {
+          provider: "expo" as const,
+          dispatches: [
+            { token: goodToken, ackId: "ticket-1" },
+            {
+              token: badToken,
+              error: {
+                message: "gone",
+                details: { error: "DeviceNotRegistered" },
+              },
+            },
+          ],
+        };
+      },
+      observe: (event) => { events.push(event); },
+    });
+
+    await walker.processEnrollment(enrollmentId);
+
+    const [log] = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(log.status).toBe("dispatched");
+
+    const dispatches = await db.select().from(dispatch).where(eq(dispatch.communicationLogId, log.id));
+    expect(dispatches).toHaveLength(2);
+
+    const byToken = Object.fromEntries(dispatches.map((d) => [d.token, d]));
+    expect(byToken[goodToken].status).toBe("dispatched");
+    expect(byToken[badToken].status).toBe("undelivered");
+
+    const remaining = await db.select().from(pushToken).where(eq(pushToken.userId, userId));
+    expect(remaining.map((t) => t.token)).toEqual([goodToken]);
+  });
+
+  it("zero tokens — log row marked dispatched, no dispatch rows", async () => {
+    const stepId = "00000000-0000-0000-0000-000000000010";
+    const { enrollmentId } = await seedWorkflow(db, {
+      steps: [{ id: stepId, type: "send", config: { title: "Hi", body: "body" } }],
+    });
+
+    const walker = new EnrollmentWalker({
+      db,
+      onSend: async (payload) => { sendCalls.push(payload); return undefined; },
+      observe: (event) => { events.push(event); },
+    });
+
+    await walker.processEnrollment(enrollmentId);
+
+    const [log] = await db.select().from(communicationLog).where(eq(communicationLog.enrollmentId, enrollmentId));
+    expect(log.status).toBe("dispatched");
+    expect(log.sentAt).toBeInstanceOf(Date);
+
+    const dispatches = await db.select().from(dispatch).where(eq(dispatch.communicationLogId, log.id));
+    expect(dispatches).toHaveLength(0);
   });
 
   it("retry path: pre-existing log row makes processEnrollment skip onSend", async () => {
@@ -696,7 +782,7 @@ describe("send idempotency", () => {
       stepId,
       userId,
       config: { title: "Hi", body: "body" },
-      status: "sent",
+      status: "dispatched",
       sentAt: new Date(),
     });
 

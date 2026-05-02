@@ -11,6 +11,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { z } from "zod";
+import type { ExpoReceipt } from "../services/notification/dispatch";
 
 export const stepTypeEnum = pgEnum("step_type", ["wait", "branch", "send", "filter", "exit"]);
 
@@ -34,9 +35,18 @@ export const workflowStatusEnum = pgEnum("workflow_status", [
 
 export const communicationStatusEnum = pgEnum("communication_status", [
   "claimed",
-  "sent",
+  "dispatched",
   "failed",
 ]);
+
+export const dispatchStatusEnum = pgEnum("dispatch_status", [
+  "dispatched",
+  "delivered",
+  "undelivered",
+  "expired",
+]);
+
+export const deliveryProviderEnum = pgEnum("delivery_provider", ["expo"]);
 
 
 export const customer = pgTable("customer", {
@@ -158,13 +168,31 @@ export const communicationLog = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     config: jsonb("config").$type<SendConfig>().notNull(),
-    status: communicationStatusEnum("status").notNull().default("sent"),
-    expoTickets: jsonb("expo_tickets").$type<unknown[]>(),
+    status: communicationStatusEnum("status").notNull().default("dispatched"),
     error: text("error"),
     sentAt: timestamp("sent_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
   (table) => [unique().on(table.enrollmentId, table.stepId)]
+);
+
+export const dispatch = pgTable(
+  "dispatch",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    communicationLogId: uuid("communication_log_id")
+      .notNull()
+      .references(() => communicationLog.id, { onDelete: "cascade" }),
+    provider: deliveryProviderEnum("provider").notNull(),
+    token: text("token").notNull(),
+    status: dispatchStatusEnum("status").notNull(),
+    ackId: text("ack_id"),
+    error: jsonb("error"),
+    receipt: jsonb("receipt").$type<ExpoReceipt>(),
+    receiptsPolledAt: timestamp("receipts_polled_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [unique().on(table.communicationLogId, table.token)]
 );
 
 export const event = pgTable("event", {
@@ -282,6 +310,20 @@ export const pushTokenRelations = relations(pushToken, ({ one }) => ({
   }),
 }));
 
+export const communicationLogRelations = relations(
+  communicationLog,
+  ({ many }) => ({
+    dispatches: many(dispatch),
+  })
+);
+
+export const dispatchRelations = relations(dispatch, ({ one }) => ({
+  communicationLog: one(communicationLog, {
+    fields: [dispatch.communicationLogId],
+    references: [communicationLog.id],
+  }),
+}));
+
 export type Customer = typeof customer.$inferSelect;
 export type NewCustomer = typeof customer.$inferInsert;
 export type Workflow = typeof workflow.$inferSelect;
@@ -295,3 +337,7 @@ export type Event = typeof event.$inferSelect;
 export type NewEvent = typeof event.$inferInsert;
 export type PushToken = typeof pushToken.$inferSelect;
 export type NewPushToken = typeof pushToken.$inferInsert;
+export type CommunicationLog = typeof communicationLog.$inferSelect;
+export type NewCommunicationLog = typeof communicationLog.$inferInsert;
+export type Dispatch = typeof dispatch.$inferSelect;
+export type NewDispatch = typeof dispatch.$inferInsert;
