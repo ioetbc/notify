@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from "bun:test";
+import type { PGlite } from "@electric-sql/pglite";
 import { eq, and, isNull, sql } from "drizzle-orm";
 import type { ExpoPushReceipt, ExpoPushReceiptId } from "expo-server-sdk";
-import { createTestDb, type TestDb } from "../../test/db";
+import { createTestDb, resetTestDb, type TestDb } from "../../test/db";
 import {
   customer,
   user,
@@ -12,9 +13,10 @@ import {
   dispatch,
   pushToken,
 } from "../../db/schema";
-import { pollReceipts } from "./poll-receipts";
+import { ReceiptPoller } from "./poll-receipts";
 
 let db: TestDb;
+let client: PGlite;
 
 const customerId = "00000000-0000-0000-0000-000000000001";
 const userId = "00000000-0000-0000-0000-000000000002";
@@ -110,12 +112,20 @@ async function eligibleDispatches() {
     .where(and(eq(dispatch.status, "dispatched"), isNull(dispatch.receiptsPolledAt)));
 }
 
+beforeAll(async () => {
+  ({ db, client } = await createTestDb());
+});
+
+afterAll(async () => {
+  await client.close();
+});
+
 beforeEach(async () => {
-  ({ db } = await createTestDb());
+  await resetTestDb(client);
   await seed();
 });
 
-describe("pollReceipts", () => {
+describe("ReceiptPoller", () => {
   it("happy path — delivered", async () => {
     const logId = "00000000-0000-0000-0000-0000000000a1";
     const dispatchId = "00000000-0000-0000-0000-0000000000b1";
@@ -127,8 +137,10 @@ describe("pollReceipts", () => {
       ackId: "r-1",
     });
 
-    const rows = await eligibleDispatches();
-    await pollReceipts({ db, expo: fakeExpo({ "r-1": { status: "ok" } }), rows });
+    await new ReceiptPoller({
+      db,
+      expo: fakeExpo({ "r-1": { status: "ok" } }),
+    }).run();
 
     const d = await getDispatch(dispatchId);
     expect(d.status).toBe("delivered");
@@ -150,14 +162,12 @@ describe("pollReceipts", () => {
       ackId: "r-1",
     });
 
-    const rows = await eligibleDispatches();
-    await pollReceipts({
+    await new ReceiptPoller({
       db,
       expo: fakeExpo({
         "r-1": { status: "error", message: "boom", details: { error: "MessageTooBig" } },
       }),
-      rows,
-    });
+    }).run();
 
     const d = await getDispatch(dispatchId);
     expect(d.status).toBe("undelivered");
@@ -182,15 +192,13 @@ describe("pollReceipts", () => {
       ackId: "r-2",
     });
 
-    const rows = await eligibleDispatches();
-    await pollReceipts({
+    await new ReceiptPoller({
       db,
       expo: fakeExpo({
         "r-1": { status: "ok" },
         "r-2": { status: "error", message: "boom", details: { error: "MessageTooBig" } },
       }),
-      rows,
-    });
+    }).run();
 
     expect((await getDispatch(d1)).status).toBe("delivered");
     expect((await getDispatch(d2)).status).toBe("undelivered");
@@ -212,8 +220,7 @@ describe("pollReceipts", () => {
     await insertDispatch({ id: dA, communicationLogId: logId, token: tokenA, ackId: "r-A" });
     await insertDispatch({ id: dB, communicationLogId: logId, token: tokenB, ackId: "r-B" });
 
-    const rows = await eligibleDispatches();
-    const result = await pollReceipts({
+    await new ReceiptPoller({
       db,
       expo: fakeExpo({
         "r-A": {
@@ -223,12 +230,10 @@ describe("pollReceipts", () => {
         },
         "r-B": { status: "ok" },
       }),
-      rows,
-    });
+    }).run();
 
     const remaining = await db.select().from(pushToken).where(eq(pushToken.userId, userId));
     expect(remaining.map((t) => t.token)).toEqual([tokenB]);
-    expect(result.deadTokensRemoved).toBe(1);
   });
 
   it("receipt not ready — dispatch row stays dispatched, receiptsPolledAt null", async () => {
@@ -242,13 +247,11 @@ describe("pollReceipts", () => {
       ackId: "r-1",
     });
 
-    const rows = await eligibleDispatches();
-    const result = await pollReceipts({ db, expo: fakeExpo({}), rows });
+    await new ReceiptPoller({ db, expo: fakeExpo({}) }).run();
 
     const d = await getDispatch(dispatchId);
     expect(d.status).toBe("dispatched");
     expect(d.receiptsPolledAt).toBeNull();
-    expect(result.deferred).toBe(1);
   });
 
   it("idempotency — running twice produces same end state", async () => {
@@ -263,13 +266,12 @@ describe("pollReceipts", () => {
     });
 
     const expo = fakeExpo({ "r-1": { status: "ok" } });
+    const poller = new ReceiptPoller({ db, expo });
 
-    const rows1 = await eligibleDispatches();
-    await pollReceipts({ db, expo, rows: rows1 });
+    await poller.run();
     const after1 = await getDispatch(dispatchId);
 
-    const rows2 = await eligibleDispatches();
-    await pollReceipts({ db, expo, rows: rows2 });
+    await poller.run();
     const after2 = await getDispatch(dispatchId);
 
     expect(after2.status).toBe(after1.status);

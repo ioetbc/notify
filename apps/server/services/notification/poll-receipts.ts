@@ -39,7 +39,6 @@ export class ReceiptPoller {
     dispatches: Dispatch[]
   ): Promise<Map<string, ExpoPushReceipt>> {
     const receiptIds = dispatches.map((dispatch) => dispatch.ackId!)
-
     const receiptsById = new Map<string, ExpoPushReceipt>();
 
     if (receiptIds.length === 0) return receiptsById;

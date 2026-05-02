@@ -6,8 +6,19 @@ import { join } from "path";
 
 const migrationsDir = join(import.meta.dir, "../drizzle");
 
+type Journal = { entries: { idx: number; tag: string }[] };
+
 function readMigration(filename: string): string {
   return readFileSync(join(migrationsDir, filename), "utf-8");
+}
+
+function loadMigrationFiles(): string[] {
+  const journal: Journal = JSON.parse(
+    readFileSync(join(migrationsDir, "meta/_journal.json"), "utf-8"),
+  );
+  return journal.entries
+    .sort((a, b) => a.idx - b.idx)
+    .map((e) => `${e.tag}.sql`);
 }
 
 /**
@@ -29,22 +40,22 @@ async function applyMigration(client: PGlite, sql: string) {
 export async function createTestDb() {
   const client = new PGlite();
 
-  // Apply migrations in order
-  const migrations = [
-    "0000_lyrical_vulcan.sql",
-    "0001_nosy_gorgon.sql",
-    "0002_orange_goliath.sql",
-    "0003_sour_electro.sql",
-    "0004_rapid_odin.sql",
-    "0005_giant_silver_samurai.sql",
-  ];
-
-  for (const file of migrations) {
+  for (const file of loadMigrationFiles()) {
     await applyMigration(client, readMigration(file));
   }
 
   const db = drizzle(client, { schema });
+
   return { db, client };
+}
+
+export async function resetTestDb(client: PGlite) {
+  const { rows } = await client.query<{ tablename: string }>(
+    `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename != '__drizzle_migrations'`,
+  );
+  if (rows.length === 0) return;
+  const list = rows.map((r) => `"public"."${r.tablename}"`).join(", ");
+  await client.exec(`TRUNCATE ${list} RESTART IDENTITY CASCADE;`);
 }
 
 export type TestDb = Awaited<ReturnType<typeof createTestDb>>["db"];

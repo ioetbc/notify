@@ -246,13 +246,11 @@ export class EnrollmentWalker {
     logId: string,
     result: SendHandlerResult | undefined
   ) {
-    const updateLog = this.db
-      .update(communicationLog)
-      .set({ status: "dispatched", sentAt: new Date() })
-      .where(eq(communicationLog.id, logId));
-
     if (!result || result.dispatches.length === 0) {
-      await updateLog;
+      await this.db
+        .update(communicationLog)
+        .set({ status: "dispatched", sentAt: new Date() })
+        .where(eq(communicationLog.id, logId));
     } else {
       const rows: NewDispatch[] = result.dispatches.map((d) =>
         match(d)
@@ -275,7 +273,13 @@ export class EnrollmentWalker {
           .exhaustive()
       );
 
-      await this.db.batch([updateLog, this.db.insert(dispatch).values(rows)]);
+      await this.db.transaction(async (tx) => {
+        await tx
+          .update(communicationLog)
+          .set({ status: "dispatched", sentAt: new Date() })
+          .where(eq(communicationLog.id, logId));
+        await tx.insert(dispatch).values(rows);
+      });
     }
 
     const deadTokens = (result?.dispatches ?? [])

@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from "bun:test";
-import { createTestDb, type TestDb } from "../../test/db";
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from "bun:test";
+import type { PGlite } from "@electric-sql/pglite";
+import { createTestDb, resetTestDb, type TestDb } from "../../test/db";
 import { EnrollmentWalker, type StepEvent } from "./enrollment";
 import {
   customer,
@@ -102,6 +103,7 @@ async function seedWorkflow(
 // ── Test setup ──────────────────────────────────────────────────────────
 
 let db: TestDb;
+let client: PGlite;
 let events: StepEvent[];
 let sendCalls: { userId: string; enrollmentId: string; stepId: string; config: SendConfig }[];
 
@@ -113,8 +115,16 @@ function createWalker() {
   });
 }
 
+beforeAll(async () => {
+  ({ db, client } = await createTestDb());
+});
+
+afterAll(async () => {
+  await client.close();
+});
+
 beforeEach(async () => {
-  ({ db } = await createTestDb());
+  await resetTestDb(client);
   events = [];
   sendCalls = [];
 });
