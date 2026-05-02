@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "bun:test";
 import type { PGlite } from "@electric-sql/pglite";
-import { createTestDb, resetTestDb, type TestDb } from "../../test/db";
-import { EnrollmentWalker, type StepEvent } from "./enrollment";
+import { createTestDb, resetTestDb, type TestDb } from "../test/db";
+import { EnrollmentWalker, type StepEvent } from "../services/enrollment/enrollment";
 import {
   customer,
   user,
@@ -12,8 +12,8 @@ import {
   communicationLog,
   dispatch,
   pushToken,
-} from "../../db/schema";
-import type { SendConfig, StepConfig } from "../../db/schema";
+} from "../db/schema";
+import type { SendConfig, StepConfig } from "../db/schema";
 import { eq, sql } from "drizzle-orm";
 
 // ── Helpers ─────────────────────────────────────────────────────────────

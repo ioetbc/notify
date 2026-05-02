@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from "bun:test"
 import type { PGlite } from "@electric-sql/pglite";
 import { eq, and, isNull, sql } from "drizzle-orm";
 import type { ExpoPushReceipt, ExpoPushReceiptId } from "expo-server-sdk";
-import { createTestDb, resetTestDb, type TestDb } from "../../test/db";
+import { createTestDb, resetTestDb, type TestDb } from "../test/db";
 import {
   customer,
   user,
@@ -12,8 +12,8 @@ import {
   communicationLog,
   dispatch,
   pushToken,
-} from "../../db/schema";
-import { ReceiptPoller } from "./poll-receipts";
+} from "../db/schema";
+import { ReceiptPoller } from "../services/notification/poll-receipts";
 
 let db: TestDb;
 let client: PGlite;

@@ -8,7 +8,7 @@ const mockCreateEvent = mock<any>();
 const mockFindActiveWorkflowsByTriggerEvent = mock<any>();
 const mockCreateWorkflowEnrollment = mock<any>();
 
-mock.module("../../repository/public", () => ({
+mock.module("../repository/public", () => ({
   findUserByExternalId: mockFindUserByExternalId,
   createUser: mockCreateUser,
   updateUserAttributes: mockUpdateUserAttributes,
@@ -21,7 +21,7 @@ mock.module("../../repository/public", () => ({
 const mockFindStepsByWorkflowId = mock<any>();
 const mockFindEdgesByWorkflowId = mock<any>();
 
-mock.module("../../repository/workflow", () => ({
+mock.module("../repository/workflow", () => ({
   findStepsByWorkflowId: mockFindStepsByWorkflowId,
   findEdgesByWorkflowId: mockFindEdgesByWorkflowId,
 }));
@@ -32,7 +32,7 @@ import {
   updateUserAttributes,
   trackEvent,
   enrollUser,
-} from "./public";
+} from "../services/public/public";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
