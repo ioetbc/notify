@@ -8,7 +8,8 @@ import {
   trackEventSchema,
   registerPushTokenSchema,
 } from "../../schemas/public";
-const app = new Hono();
+import { integrationApp } from "./integration";
+const app = new Hono().route("/", integrationApp);
 
 function getCustomerId(c: { req: { header: (name: string) => string | undefined } }) {
   const customerId = c.req.header('x-customer-id');

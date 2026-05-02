@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { AccordionSection } from '../../components/accordion-section';
 import { CampaignRow } from '../../components/campaign-row';
 import { TransactionalRow } from '../../components/transactional-row';
@@ -19,12 +20,20 @@ export function Home() {
     <div className="flex flex-col gap-4 p-6">
       <div className="flex justify-between items-center">
         <h1 className="text-base font-semibold text-text-primary">Home</h1>
-        <button
-          onClick={() => setIsModalOpen(true)}
-          className="px-3 py-1.5 bg-text-primary text-white rounded-md hover:bg-gray-800 transition-colors text-sm font-medium cursor-pointer"
-        >
-          New
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/integrations"
+            className="px-3 py-1.5 text-sm font-medium text-text-primary hover:bg-row-hover rounded-md transition-colors"
+          >
+            Integrations
+          </Link>
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="px-3 py-1.5 bg-text-primary text-white rounded-md hover:bg-gray-800 transition-colors text-sm font-medium cursor-pointer"
+          >
+            New
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-col">

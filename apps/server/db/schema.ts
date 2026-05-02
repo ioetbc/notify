@@ -48,6 +48,23 @@ export const dispatchStatusEnum = pgEnum("dispatch_status", [
 
 export const deliveryProviderEnum = pgEnum("delivery_provider", ["expo"]);
 
+export const integrationProviderEnum = pgEnum("integration_provider", ["posthog"]);
+
+export const PosthogRegionSchema = z.enum(["us", "eu"]);
+export type PosthogRegion = z.infer<typeof PosthogRegionSchema>;
+
+export const PosthogIntegrationConfigSchema = z.object({
+  personal_api_key_encrypted: z.string(),
+  project_id: z.string(),
+  region: PosthogRegionSchema.default("us"),
+  hog_function_id: z.string().nullable(),
+  webhook_secret_encrypted: z.string(),
+});
+
+export type PosthogIntegrationConfig = z.infer<typeof PosthogIntegrationConfigSchema>;
+
+export type IntegrationConfig = PosthogIntegrationConfig;
+
 
 export const customer = pgTable("customer", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -222,11 +239,39 @@ export const pushToken = pgTable(
   (table) => [unique().on(table.userId, table.token)]
 );
 
+export const customerIntegration = pgTable(
+  "customer_integration",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customer.id, { onDelete: "cascade" }),
+    provider: integrationProviderEnum("provider").notNull(),
+    config: jsonb("config").$type<IntegrationConfig>().notNull(),
+    connectedAt: timestamp("connected_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [unique().on(table.customerId, table.provider)]
+);
+
+export type CustomerIntegration = typeof customerIntegration.$inferSelect;
+export type NewCustomerIntegration = typeof customerIntegration.$inferInsert;
+
 export const customerRelations = relations(customer, ({ many }) => ({
   users: many(user),
   workflows: many(workflow),
   events: many(event),
+  integrations: many(customerIntegration),
 }));
+
+export const customerIntegrationRelations = relations(
+  customerIntegration,
+  ({ one }) => ({
+    customer: one(customer, {
+      fields: [customerIntegration.customerId],
+      references: [customer.id],
+    }),
+  })
+);
 
 export const userRelations = relations(user, ({ one, many }) => ({
   customer: one(customer, {

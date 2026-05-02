@@ -31,6 +31,11 @@ declare module "sst" {
       "connectionString": string
       "type": "sst.sst.Linkable"
     }
+    "PosthogWebhookApi": {
+      "name": string
+      "type": "sst.aws.Function"
+      "url": string
+    }
     "PublicApi": {
       "name": string
       "type": "sst.aws.Function"
