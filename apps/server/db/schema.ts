@@ -8,6 +8,7 @@ import {
   unique,
   jsonb,
   boolean,
+  integer,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { z } from "zod";
@@ -217,9 +218,13 @@ export const event = pgTable("event", {
   customerId: uuid("customer_id")
     .notNull()
     .references(() => customer.id, { onDelete: "cascade" }),
+  eventDefinitionId: uuid("event_definition_id").references(
+    () => customerEventDefinition.id,
+    { onDelete: "set null" }
+  ),
   userId: uuid("user_id")
-    .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
+  externalId: text("external_id").notNull(),
   eventName: text("event_name").notNull(),
   properties: jsonb("properties"),
   timestamp: timestamp("timestamp", { withTimezone: true }).notNull(),
@@ -253,22 +258,62 @@ export const customerIntegration = pgTable(
   (table) => [unique().on(table.customerId, table.provider)]
 );
 
+export const customerEventDefinition = pgTable(
+  "customer_event_definition",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customer.id, { onDelete: "cascade" }),
+    integrationId: uuid("integration_id")
+      .notNull()
+      .references(() => customerIntegration.id, { onDelete: "cascade" }),
+    provider: integrationProviderEnum("provider").notNull(),
+    eventName: text("event_name").notNull(),
+    volume: integer("volume"),
+    active: boolean("active").default(true).notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [unique().on(table.integrationId, table.eventName)]
+);
+
 export type CustomerIntegration = typeof customerIntegration.$inferSelect;
 export type NewCustomerIntegration = typeof customerIntegration.$inferInsert;
+export type CustomerEventDefinition = typeof customerEventDefinition.$inferSelect;
+export type NewCustomerEventDefinition = typeof customerEventDefinition.$inferInsert;
 
 export const customerRelations = relations(customer, ({ many }) => ({
   users: many(user),
   workflows: many(workflow),
   events: many(event),
   integrations: many(customerIntegration),
+  eventDefinitions: many(customerEventDefinition),
 }));
 
 export const customerIntegrationRelations = relations(
   customerIntegration,
-  ({ one }) => ({
+  ({ one, many }) => ({
     customer: one(customer, {
       fields: [customerIntegration.customerId],
       references: [customer.id],
+    }),
+    eventDefinitions: many(customerEventDefinition),
+  })
+);
+
+export const customerEventDefinitionRelations = relations(
+  customerEventDefinition,
+  ({ one }) => ({
+    customer: one(customer, {
+      fields: [customerEventDefinition.customerId],
+      references: [customer.id],
+    }),
+    integration: one(customerIntegration, {
+      fields: [customerEventDefinition.integrationId],
+      references: [customerIntegration.id],
     }),
   })
 );
@@ -342,6 +387,10 @@ export const eventRelations = relations(event, ({ one }) => ({
     fields: [event.customerId],
     references: [customer.id],
   }),
+  eventDefinition: one(customerEventDefinition, {
+    fields: [event.eventDefinitionId],
+    references: [customerEventDefinition.id],
+  }),
   user: one(user, {
     fields: [event.userId],
     references: [user.id],
@@ -380,6 +429,8 @@ export type NewStepEdge = typeof stepEdge.$inferInsert;
 export type WorkflowEnrollment = typeof workflowEnrollment.$inferSelect;
 export type Event = typeof event.$inferSelect;
 export type NewEvent = typeof event.$inferInsert;
+export type CustomerEventDefinitionRow = typeof customerEventDefinition.$inferSelect;
+export type NewCustomerEventDefinitionRow = typeof customerEventDefinition.$inferInsert;
 export type PushToken = typeof pushToken.$inferSelect;
 export type NewPushToken = typeof pushToken.$inferInsert;
 export type CommunicationLog = typeof communicationLog.$inferSelect;

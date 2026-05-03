@@ -7,6 +7,7 @@ import {
   workflowEnrollment,
   pushToken,
 } from "../../db";
+import { upsertSeenPosthogEventDefinition } from "../event-definition";
 import type { NewEvent } from "../../db";
 import type { Attributes } from "../../schemas/public";
 
@@ -61,6 +62,14 @@ export async function updateUserAttributes(
 export async function createEvent(values: NewEvent) {
   const [created] = await db.insert(event).values(values).returning();
   return created;
+}
+
+export async function upsertSeenPosthogEvent(values: {
+  customerId: string;
+  integrationId: string;
+  eventName: string;
+}) {
+  return upsertSeenPosthogEventDefinition(db, values);
 }
 
 export async function findActiveWorkflowsByTriggerEvent(

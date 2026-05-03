@@ -30,6 +30,7 @@ let db: TestDb;
 let client: PGlite;
 let trackEventCalls: Array<unknown[]>;
 let trackEventReturn: unknown = { id: "evt-1" };
+let integrationId: string;
 
 const mockTrackEvent = mock(async (...args: unknown[]) => {
   trackEventCalls.push(args);
@@ -49,11 +50,13 @@ async function seedCustomer(id = CUSTOMER_ID) {
 }
 
 async function seedIntegration(customerId = CUSTOMER_ID) {
-  return createIntegration(db, {
+  const integration = await createIntegration(db, {
     customerId,
     provider: "posthog",
     config: baseConfig,
   });
+  integrationId = integration.id;
+  return integration;
 }
 
 function makeRequest(opts: {
@@ -113,6 +116,7 @@ describe("posthog webhook handler", () => {
     expect(trackEventCalls).toHaveLength(1);
     expect(trackEventCalls[0]).toEqual([
       CUSTOMER_ID,
+      integrationId,
       "user-ext-1",
       "purchase_completed",
       { amount: 42 },
@@ -202,7 +206,7 @@ describe("posthog webhook handler", () => {
 
     expect(res.status).toBe(202);
     expect(trackEventCalls).toHaveLength(1);
-    expect((trackEventCalls[0] as any[])[2]).toBe("$pageview");
+    expect((trackEventCalls[0] as any[])[3]).toBe("$pageview");
   });
 
   it("body re-stringification footgun: signature must match raw bytes", async () => {

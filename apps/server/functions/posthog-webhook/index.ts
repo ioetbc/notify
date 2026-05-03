@@ -1,8 +1,8 @@
 import { handle } from "hono/aws-lambda";
 import { db } from "../../db";
-import { trackEvent } from "../../services/public/public";
+import { trackPosthogEvent } from "../../services/public/public";
 import { createWebhookApp } from "./handler";
 
-const app = createWebhookApp({ db, trackEvent });
+const app = createWebhookApp({ db, trackEvent: trackPosthogEvent });
 
 export const handler = handle(app);

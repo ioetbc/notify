@@ -1,6 +1,7 @@
 import { randomBytes } from "crypto";
 import type { Db, PosthogIntegrationConfig, PosthogRegion } from "../../db";
 import * as integrationRepo from "../../repository/integration";
+import * as eventDefinitionRepo from "../../repository/event-definition";
 
 const POSTHOG_REGION_HOST: Record<PosthogRegion, string> = {
   us: "https://us.posthog.com",
@@ -30,6 +31,10 @@ export type PosthogClient = {
     cfg: { personalApiKey: string; projectId: string; baseUrl?: string },
     args: { days: number; excludePrefixed: boolean; limit: number }
   ) => Promise<Array<{ name: string; volume: number }>>;
+  updateHogFunctionFilters: (
+    cfg: { personalApiKey: string; projectId: string; baseUrl?: string },
+    args: { hogFunctionId: string; eventNames: string[] }
+  ) => Promise<void>;
 };
 
 export type IntegrationDeps = {
@@ -40,6 +45,11 @@ export type IntegrationDeps = {
     | "create"
     | "updateConfig"
     | "deleteIntegration"
+  >;
+  eventDefinitions: Pick<
+    typeof eventDefinitionRepo,
+    | "listEventSelectionByIntegration"
+    | "setPosthogEventSelection"
   >;
   posthog: PosthogClient;
   webhookBaseUrl: string;
@@ -93,63 +103,12 @@ export async function connect(
     config: initialConfig,
   });
 
-  console.log("[integration.connect] row created", {
+  console.log("[integration.connect] row created, success", {
     integrationId: created.id,
     customerId: input.customerId,
   });
 
-  const webhookUrl = `${deps.webhookBaseUrl.replace(/\/+$/, "")}/webhooks/posthog/${input.customerId}`;
-
-  try {
-    console.log("[integration.connect] calling posthog.createHogFunction", {
-      integrationId: created.id,
-      webhookUrl,
-      projectId: input.projectId,
-    });
-
-    const { hogFunctionId } = await deps.posthog.createHogFunction(
-      {
-        personalApiKey: input.personalApiKey,
-        projectId: input.projectId,
-        baseUrl: POSTHOG_REGION_HOST[input.region],
-      },
-      {
-        webhookUrl,
-        webhookSecret,
-        eventNames: [],
-        customerId: input.customerId,
-      }
-    );
-
-    console.log("[integration.connect] hog function created", {
-      integrationId: created.id,
-      hogFunctionId,
-    });
-
-    await deps.repo.updateConfig(deps.db, created.id, {
-      ...initialConfig,
-      hog_function_id: hogFunctionId,
-    });
-
-    console.log("[integration.connect] config updated, success", {
-      integrationId: created.id,
-    });
-
-    return { integration_id: created.id };
-  } catch (err) {
-    console.error("[integration.connect] failed after row created — rolling back", {
-      integrationId: created.id,
-      customerId: input.customerId,
-      errorName: (err as Error)?.name,
-      errorMessage: (err as Error)?.message,
-      errorStack: (err as Error)?.stack,
-    });
-    await deps.repo.deleteIntegration(deps.db, created.id);
-    console.log("[integration.connect] rollback complete", {
-      integrationId: created.id,
-    });
-    throw err;
-  }
+  return { integration_id: created.id };
 }
 
 export type IntegrationSummary = {
@@ -189,7 +148,7 @@ export async function listEvents(
     limit: number;
     includeAutocaptured: boolean;
   }
-): Promise<Array<{ name: string; volume: number }> | null> {
+): Promise<Array<{ name: string; volume: number; active: boolean }> | null> {
   const found = await deps.repo.findByCustomerAndProvider(
     deps.db,
     input.customerId,
@@ -200,7 +159,7 @@ export async function listEvents(
   const cfg = found.config as PosthogIntegrationConfig;
   const personalApiKey = decode(cfg.personal_api_key_encrypted);
 
-  return deps.posthog.listRecentEvents(
+  const events = await deps.posthog.listRecentEvents(
     {
       personalApiKey,
       projectId: cfg.project_id,
@@ -212,6 +171,85 @@ export async function listEvents(
       excludePrefixed: !input.includeAutocaptured,
     }
   );
+
+  const stored = await deps.eventDefinitions.listEventSelectionByIntegration(
+    deps.db,
+    found.id
+  );
+  const storedByName = new Map(stored.map((event) => [event.name, event]));
+  const returnedNames = new Set(events.map((event) => event.name));
+  const merged = events.map((event) => ({
+    ...event,
+    active: storedByName.get(event.name)?.active ?? false,
+  }));
+
+  for (const event of stored) {
+    if (!returnedNames.has(event.name)) {
+      merged.push({
+        name: event.name,
+        volume: event.volume ?? 0,
+        active: event.active,
+      });
+    }
+  }
+
+  return merged;
+}
+
+export async function saveEventSelection(
+  deps: IntegrationDeps,
+  input: {
+    customerId: string;
+    events: Array<{ name: string; volume?: number | null }>;
+  }
+): Promise<{ event_names: string[] } | null> {
+  const found = await deps.repo.findByCustomerAndProvider(
+    deps.db,
+    input.customerId,
+    "posthog"
+  );
+  if (!found) return null;
+
+  const cfg = found.config as PosthogIntegrationConfig;
+  const personalApiKey = decode(cfg.personal_api_key_encrypted);
+  const webhookSecret = decode(cfg.webhook_secret_encrypted);
+  const selectedNames = [...new Set(input.events.map((event) => event.name))];
+  const posthogCfg = {
+    personalApiKey,
+    projectId: cfg.project_id,
+    baseUrl: POSTHOG_REGION_HOST[cfg.region ?? "us"],
+  };
+
+  if (selectedNames.length > 0 && !cfg.hog_function_id) {
+    const webhookUrl = `${deps.webhookBaseUrl.replace(/\/+$/, "")}/webhooks/posthog/${input.customerId}`;
+    const { hogFunctionId } = await deps.posthog.createHogFunction(
+      posthogCfg,
+      {
+        webhookUrl,
+        webhookSecret,
+        eventNames: selectedNames,
+        customerId: input.customerId,
+      }
+    );
+
+    await deps.repo.updateConfig(deps.db, found.id, {
+      ...cfg,
+      hog_function_id: hogFunctionId,
+    });
+  } else if (cfg.hog_function_id) {
+    await deps.posthog.updateHogFunctionFilters(posthogCfg, {
+      hogFunctionId: cfg.hog_function_id,
+      eventNames: selectedNames,
+    });
+  }
+
+  await deps.eventDefinitions.setPosthogEventSelection(deps.db, {
+    customerId: input.customerId,
+    integrationId: found.id,
+    events: input.events,
+  });
+
+  return { event_names: selectedNames };
 }
 
 export async function disconnect(

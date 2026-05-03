@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, mock } from "bun:test";
 import {
   connect,
   listEvents,
+  saveEventSelection,
   disconnect,
   IntegrationAlreadyExistsError,
   type IntegrationDeps,
@@ -20,7 +21,10 @@ const mockFindByCustomerAndProvider = mock<any>();
 const mockCreate = mock<any>();
 const mockUpdateConfig = mock<any>();
 const mockDeleteIntegration = mock<any>();
+const mockSetPosthogEventSelection = mock<any>();
+const mockListEventSelectionByIntegration = mock<any>();
 const mockCreateHogFunction = mock<any>();
+const mockUpdateHogFunctionFilters = mock<any>();
 const mockListRecentEvents = mock<any>();
 
 function fakeRow(overrides?: Partial<CustomerIntegration>): CustomerIntegration {
@@ -44,6 +48,7 @@ function makeDeps(): IntegrationDeps {
   const posthogClient: PosthogClient = {
     createHogFunction: mockCreateHogFunction,
     listRecentEvents: mockListRecentEvents,
+    updateHogFunctionFilters: mockUpdateHogFunctionFilters,
   };
   return {
     db: {} as any,
@@ -52,6 +57,10 @@ function makeDeps(): IntegrationDeps {
       create: mockCreate,
       updateConfig: mockUpdateConfig,
       deleteIntegration: mockDeleteIntegration,
+    },
+    eventDefinitions: {
+      setPosthogEventSelection: mockSetPosthogEventSelection,
+      listEventSelectionByIntegration: mockListEventSelectionByIntegration,
     },
     posthog: posthogClient,
     webhookBaseUrl: WEBHOOK_BASE,
@@ -63,23 +72,26 @@ beforeEach(() => {
   mockCreate.mockReset();
   mockUpdateConfig.mockReset();
   mockDeleteIntegration.mockReset();
+  mockSetPosthogEventSelection.mockReset();
+  mockListEventSelectionByIntegration.mockReset();
+  mockListEventSelectionByIntegration.mockResolvedValue([]);
   mockCreateHogFunction.mockReset();
+  mockUpdateHogFunctionFilters.mockReset();
   mockListRecentEvents.mockReset();
 });
 
 describe("connect", () => {
-  it("inserts a row, calls the client, and writes back the hog function id", async () => {
+  it("inserts a row without provisioning the hog function", async () => {
     mockFindByCustomerAndProvider.mockResolvedValue(null);
     mockCreate.mockImplementation(async (_db: unknown, input: any) =>
       fakeRow({ config: input.config })
     );
-    mockCreateHogFunction.mockResolvedValue({ hogFunctionId: HOG_FUNCTION_ID });
-    mockUpdateConfig.mockResolvedValue(fakeRow());
 
     const result = await connect(makeDeps(), {
       customerId: CUSTOMER_ID,
       personalApiKey: PERSONAL_API_KEY,
       projectId: PROJECT_ID,
+      region: "us",
     });
 
     expect(result).toEqual({ integration_id: INTEGRATION_ID });
@@ -101,46 +113,26 @@ describe("connect", () => {
     ).toString("utf-8");
     expect(decodedSecret).toMatch(/^[0-9a-f]{64}$/);
 
-    expect(mockCreateHogFunction).toHaveBeenCalledTimes(1);
-    const [cfg, hogArgs] = mockCreateHogFunction.mock.calls[0] as [any, any];
-    expect(cfg).toEqual({
-      personalApiKey: PERSONAL_API_KEY,
-      projectId: PROJECT_ID,
-    });
-    expect(hogArgs.webhookUrl).toBe(
-      `${WEBHOOK_BASE}/webhooks/posthog/${CUSTOMER_ID}`
-    );
-    expect(hogArgs.eventNames).toEqual([]);
-    expect(hogArgs.customerId).toBe(CUSTOMER_ID);
-    expect(hogArgs.webhookSecret).toBe(decodedSecret);
-
-    expect(mockUpdateConfig).toHaveBeenCalledTimes(1);
-    const updateArgs = mockUpdateConfig.mock.calls[0];
-    expect(updateArgs[1]).toBe(INTEGRATION_ID);
-    expect((updateArgs[2] as any).hog_function_id).toBe(HOG_FUNCTION_ID);
-
+    expect(mockCreateHogFunction).not.toHaveBeenCalled();
+    expect(mockUpdateConfig).not.toHaveBeenCalled();
     expect(mockDeleteIntegration).not.toHaveBeenCalled();
   });
 
-  it("rolls back the row when the client throws", async () => {
+  it("does not call PostHog during connect", async () => {
     mockFindByCustomerAndProvider.mockResolvedValue(null);
     mockCreate.mockImplementation(async (_db: unknown, input: any) =>
       fakeRow({ config: input.config })
     );
-    const boom = new Error("posthog exploded");
-    mockCreateHogFunction.mockRejectedValue(boom);
 
-    await expect(
-      connect(makeDeps(), {
-        customerId: CUSTOMER_ID,
-        personalApiKey: PERSONAL_API_KEY,
-        projectId: PROJECT_ID,
-      })
-    ).rejects.toBe(boom);
+    await connect(makeDeps(), {
+      customerId: CUSTOMER_ID,
+      personalApiKey: PERSONAL_API_KEY,
+      projectId: PROJECT_ID,
+      region: "us",
+    });
 
-    expect(mockDeleteIntegration).toHaveBeenCalledTimes(1);
-    expect(mockDeleteIntegration.mock.calls[0][1]).toBe(INTEGRATION_ID);
-    expect(mockUpdateConfig).not.toHaveBeenCalled();
+    expect(mockCreateHogFunction).not.toHaveBeenCalled();
+    expect(mockListRecentEvents).not.toHaveBeenCalled();
   });
 
   it("rejects when an integration already exists", async () => {
@@ -151,6 +143,7 @@ describe("connect", () => {
         customerId: CUSTOMER_ID,
         personalApiKey: PERSONAL_API_KEY,
         projectId: PROJECT_ID,
+        region: "us",
       })
     ).rejects.toBeInstanceOf(IntegrationAlreadyExistsError);
 
@@ -186,6 +179,10 @@ describe("disconnect", () => {
 describe("listEvents", () => {
   it("decodes the api key and forwards the call", async () => {
     mockFindByCustomerAndProvider.mockResolvedValue(fakeRow());
+    mockListEventSelectionByIntegration.mockResolvedValue([
+      { name: "purchase", volume: 10, active: true },
+      { name: "old_event", volume: 3, active: false },
+    ]);
     mockListRecentEvents.mockResolvedValue([
       { name: "purchase", volume: 12 },
     ]);
@@ -197,7 +194,10 @@ describe("listEvents", () => {
       includeAutocaptured: false,
     });
 
-    expect(events).toEqual([{ name: "purchase", volume: 12 }]);
+    expect(events).toEqual([
+      { name: "purchase", volume: 12, active: true },
+      { name: "old_event", volume: 3, active: false },
+    ]);
     const [cfg, args] = mockListRecentEvents.mock.calls[0] as [any, any];
     expect(cfg).toEqual({
       personalApiKey: PERSONAL_API_KEY,
@@ -233,5 +233,86 @@ describe("listEvents", () => {
 
     expect(events).toBeNull();
     expect(mockListRecentEvents).not.toHaveBeenCalled();
+  });
+});
+
+describe("saveEventSelection", () => {
+  it("creates the hog function on first non-empty selection and stores active events", async () => {
+    mockFindByCustomerAndProvider.mockResolvedValue(fakeRow());
+    mockCreateHogFunction.mockResolvedValue({ hogFunctionId: HOG_FUNCTION_ID });
+    mockUpdateConfig.mockResolvedValue(fakeRow());
+    mockSetPosthogEventSelection.mockResolvedValue(undefined);
+
+    const result = await saveEventSelection(makeDeps(), {
+      customerId: CUSTOMER_ID,
+      events: [{ name: "purchase", volume: 12 }],
+    });
+
+    expect(result).toEqual({ event_names: ["purchase"] });
+    expect(mockCreateHogFunction).toHaveBeenCalledTimes(1);
+    const [cfg, args] = mockCreateHogFunction.mock.calls[0] as [any, any];
+    expect(cfg).toEqual({
+      personalApiKey: PERSONAL_API_KEY,
+      projectId: PROJECT_ID,
+      baseUrl: "https://eu.posthog.com",
+    });
+    expect(args.eventNames).toEqual(["purchase"]);
+    expect(args.webhookUrl).toBe(`${WEBHOOK_BASE}/webhooks/posthog/${CUSTOMER_ID}`);
+    expect(mockUpdateConfig.mock.calls[0][2].hog_function_id).toBe(HOG_FUNCTION_ID);
+    expect(mockSetPosthogEventSelection.mock.calls[0][1]).toEqual({
+      customerId: CUSTOMER_ID,
+      integrationId: INTEGRATION_ID,
+      events: [{ name: "purchase", volume: 12 }],
+    });
+  });
+
+  it("updates filters and marks deselected events inactive when hog function exists", async () => {
+    mockFindByCustomerAndProvider.mockResolvedValue(
+      fakeRow({
+        config: {
+          personal_api_key_encrypted: Buffer.from(PERSONAL_API_KEY).toString("base64"),
+          project_id: PROJECT_ID,
+          region: "eu",
+          hog_function_id: HOG_FUNCTION_ID,
+          webhook_secret_encrypted: Buffer.from("ws").toString("base64"),
+        },
+      })
+    );
+    mockUpdateHogFunctionFilters.mockResolvedValue(undefined);
+    mockSetPosthogEventSelection.mockResolvedValue(undefined);
+
+    const result = await saveEventSelection(makeDeps(), {
+      customerId: CUSTOMER_ID,
+      events: [],
+    });
+
+    expect(result).toEqual({ event_names: [] });
+    expect(mockCreateHogFunction).not.toHaveBeenCalled();
+    expect(mockUpdateHogFunctionFilters).toHaveBeenCalledWith(
+      {
+        personalApiKey: PERSONAL_API_KEY,
+        projectId: PROJECT_ID,
+        baseUrl: "https://eu.posthog.com",
+      },
+      { hogFunctionId: HOG_FUNCTION_ID, eventNames: [] }
+    );
+    expect(mockSetPosthogEventSelection.mock.calls[0][1]).toEqual({
+      customerId: CUSTOMER_ID,
+      integrationId: INTEGRATION_ID,
+      events: [],
+    });
+  });
+
+  it("returns null when no integration exists", async () => {
+    mockFindByCustomerAndProvider.mockResolvedValue(null);
+
+    const result = await saveEventSelection(makeDeps(), {
+      customerId: CUSTOMER_ID,
+      events: [{ name: "purchase" }],
+    });
+
+    expect(result).toBeNull();
+    expect(mockCreateHogFunction).not.toHaveBeenCalled();
+    expect(mockSetPosthogEventSelection).not.toHaveBeenCalled();
   });
 });

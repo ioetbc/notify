@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, mock } from "bun:test";
 import type { PGlite } from "@electric-sql/pglite";
 import { createTestDb, resetTestDb, type TestDb } from "../test/db";
-import { customer, customerIntegration } from "../db/schema";
+import { customer, customerIntegration, customerEventDefinition } from "../db/schema";
 
 // ── PostHog client stubs (Chunk A surface) ───────────────────────────────
 class PosthogAuthError extends Error {
@@ -102,7 +102,6 @@ describe("auth", () => {
 describe("POST /api/integrations/posthog/connect", () => {
   it("happy path inserts a row and returns the integration id", async () => {
     await seedCustomer();
-    mockCreateHogFunction.mockResolvedValue({ hogFunctionId: "hf-1" });
 
     const res = await request("/api/integrations/posthog/connect", {
       method: "POST",
@@ -115,20 +114,14 @@ describe("POST /api/integrations/posthog/connect", () => {
 
     const rows = await testDb.select().from(customerIntegration);
     expect(rows).toHaveLength(1);
-    expect(rows[0].config.hog_function_id).toBe("hf-1");
+    expect(rows[0].config.hog_function_id).toBeNull();
     expect(rows[0].config.project_id).toBe("42");
 
-    expect(mockCreateHogFunction).toHaveBeenCalledTimes(1);
-    const [, hogArgs] = mockCreateHogFunction.mock.calls[0] as [any, any];
-    expect(hogArgs.webhookUrl).toBe(
-      `${WEBHOOK_BASE}/webhooks/posthog/${CUSTOMER_ID}`
-    );
+    expect(mockCreateHogFunction).not.toHaveBeenCalled();
   });
 
   it("returns 409 when an integration already exists", async () => {
     await seedCustomer();
-    mockCreateHogFunction.mockResolvedValue({ hogFunctionId: "hf-1" });
-
     const first = await request("/api/integrations/posthog/connect", {
       method: "POST",
       body: JSON.stringify({ personal_api_key: "k", project_id: "1" }),
@@ -142,7 +135,7 @@ describe("POST /api/integrations/posthog/connect", () => {
     expect(second.status).toBe(409);
   });
 
-  it("returns 502 when PostHog auth fails and rolls back the row", async () => {
+  it("does not call PostHog during connect", async () => {
     await seedCustomer();
     mockCreateHogFunction.mockRejectedValue(new PosthogAuthError());
 
@@ -151,15 +144,13 @@ describe("POST /api/integrations/posthog/connect", () => {
       body: JSON.stringify({ personal_api_key: "bad", project_id: "1" }),
     });
 
-    expect(res.status).toBe(502);
-    const body = (await res.json()) as { code: string };
-    expect(body.code).toBe("posthog_auth_failed");
-
+    expect(res.status).toBe(201);
     const rows = await testDb.select().from(customerIntegration);
-    expect(rows).toHaveLength(0);
+    expect(rows).toHaveLength(1);
+    expect(mockCreateHogFunction).not.toHaveBeenCalled();
   });
 
-  it("returns 503 with Retry-After on transient PostHog errors", async () => {
+  it("does not surface transient PostHog errors during connect", async () => {
     await seedCustomer();
     mockCreateHogFunction.mockRejectedValue(new PosthogTransientError());
 
@@ -168,16 +159,14 @@ describe("POST /api/integrations/posthog/connect", () => {
       body: JSON.stringify({ personal_api_key: "k", project_id: "1" }),
     });
 
-    expect(res.status).toBe(503);
-    expect(res.headers.get("retry-after")).toBeTruthy();
+    expect(res.status).toBe(201);
+    expect(res.headers.get("retry-after")).toBeNull();
   });
 });
 
 describe("GET /api/integrations/posthog/events", () => {
   it("returns the list from the PostHog client", async () => {
     await seedCustomer();
-
-    mockCreateHogFunction.mockResolvedValue({ hogFunctionId: "hf-1" });
 
     await request("/api/integrations/posthog/connect", {
       method: "POST",
@@ -194,9 +183,14 @@ describe("GET /api/integrations/posthog/events", () => {
     expect(res.status).toBe(200);
     
     expect(await res.json()).toEqual([
-      { name: "purchase", volume: 9 },
-      { name: "signup", volume: 4 },
+      { name: "purchase", volume: 9, active: false },
+      { name: "signup", volume: 4, active: false },
     ]);
+
+    const definitions = await testDb
+      .select()
+      .from(customerEventDefinition);
+    expect(definitions).toHaveLength(0);
 
     const [, args] = mockListRecentEvents.mock.calls[0];
 
@@ -206,6 +200,93 @@ describe("GET /api/integrations/posthog/events", () => {
   it("returns 404 when no integration exists", async () => {
     await seedCustomer();
     const res = await request("/api/integrations/posthog/events");
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /api/integrations/posthog/events/selection", () => {
+  it("stores selected events and provisions the hog function", async () => {
+    await seedCustomer();
+    mockCreateHogFunction.mockResolvedValue({ hogFunctionId: "hf-1" });
+    await request("/api/integrations/posthog/connect", {
+      method: "POST",
+      body: JSON.stringify({ personal_api_key: "k", project_id: "1" }),
+    });
+
+    const res = await request("/api/integrations/posthog/events/selection", {
+      method: "POST",
+      body: JSON.stringify({
+        events: [
+          { name: "purchase", volume: 9 },
+          { name: "signup", volume: 4 },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ event_names: ["purchase", "signup"] });
+
+    const integrations = await testDb.select().from(customerIntegration);
+    expect(integrations[0].config.hog_function_id).toBe("hf-1");
+    expect(mockCreateHogFunction).toHaveBeenCalledTimes(1);
+    const [, hogArgs] = mockCreateHogFunction.mock.calls[0] as [any, any];
+    expect(hogArgs.eventNames).toEqual(["purchase", "signup"]);
+
+    const definitions = await testDb.select().from(customerEventDefinition);
+    expect(definitions.map((row) => ({
+      eventName: row.eventName,
+      volume: row.volume,
+      active: row.active,
+    }))).toEqual([
+      { eventName: "purchase", volume: 9, active: true },
+      { eventName: "signup", volume: 4, active: true },
+    ]);
+  });
+
+  it("marks deselected events inactive and updates the hog function filters", async () => {
+    await seedCustomer();
+    mockCreateHogFunction.mockResolvedValue({ hogFunctionId: "hf-1" });
+    mockUpdateHogFunctionFilters.mockResolvedValue(undefined);
+    await request("/api/integrations/posthog/connect", {
+      method: "POST",
+      body: JSON.stringify({ personal_api_key: "k", project_id: "1" }),
+    });
+    await request("/api/integrations/posthog/events/selection", {
+      method: "POST",
+      body: JSON.stringify({
+        events: [
+          { name: "purchase", volume: 9 },
+          { name: "signup", volume: 4 },
+        ],
+      }),
+    });
+
+    const res = await request("/api/integrations/posthog/events/selection", {
+      method: "POST",
+      body: JSON.stringify({ events: [{ name: "purchase", volume: 9 }] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockUpdateHogFunctionFilters).toHaveBeenCalledWith(
+      expect.anything(),
+      { hogFunctionId: "hf-1", eventNames: ["purchase"] }
+    );
+    const definitions = await testDb.select().from(customerEventDefinition);
+    expect(definitions.map((row) => ({
+      eventName: row.eventName,
+      active: row.active,
+    })).sort((a, b) => a.eventName.localeCompare(b.eventName))).toEqual([
+      { eventName: "purchase", active: true },
+      { eventName: "signup", active: false },
+    ]);
+  });
+
+  it("returns 404 when no integration exists", async () => {
+    await seedCustomer();
+    const res = await request("/api/integrations/posthog/events/selection", {
+      method: "POST",
+      body: JSON.stringify({ events: [{ name: "purchase" }] }),
+    });
     expect(res.status).toBe(404);
   });
 });

@@ -143,6 +143,7 @@ export async function trackEvent(
   const evt = await repository.createEvent({
     customerId,
     userId: foundUser.id,
+    externalId,
     eventName,
     properties: properties ?? null,
     timestamp: timestamp ? new Date(timestamp) : new Date(),
@@ -162,6 +163,57 @@ export async function trackEvent(
     id: evt.id,
     event: evt.eventName,
     external_id: externalId,
+    received_at: evt.createdAt!.toISOString(),
+    workflows_triggered: workflowsTriggered,
+  };
+}
+
+export async function trackPosthogEvent(
+  customerId: string,
+  integrationId: string,
+  externalId: string,
+  eventName: string,
+  properties?: Record<string, unknown>,
+  timestamp?: string
+) {
+  const definition = await repository.upsertSeenPosthogEvent({
+    customerId,
+    integrationId,
+    eventName,
+  });
+
+  const foundUser = await repository.findUserByExternalId(
+    customerId,
+    externalId
+  );
+
+  const evt = await repository.createEvent({
+    customerId,
+    eventDefinitionId: definition.id,
+    userId: foundUser?.id ?? null,
+    externalId,
+    eventName,
+    properties: properties ?? null,
+    timestamp: timestamp ? new Date(timestamp) : new Date(),
+  });
+
+  let workflowsTriggered = 0;
+
+  if (foundUser) {
+    const matchingWorkflows =
+      await repository.findActiveWorkflowsByTriggerEvent(customerId, eventName);
+
+    for (const wf of matchingWorkflows) {
+      const enrollment = await enrollUser(foundUser.id, wf.id);
+      if (enrollment) workflowsTriggered++;
+    }
+  }
+
+  return {
+    id: evt.id,
+    event: evt.eventName,
+    external_id: externalId,
+    user_id: foundUser?.id ?? null,
     received_at: evt.createdAt!.toISOString(),
     workflows_triggered: workflowsTriggered,
   };

@@ -4,10 +4,12 @@ import { z } from "zod";
 import { match } from "ts-pattern";
 import { db } from "../../db";
 import * as integrationRepo from "../../repository/integration";
+import * as eventDefinitionRepo from "../../repository/event-definition";
 import * as posthog from "../../services/posthog";
 import {
   connect,
   listEvents,
+  saveEventSelection,
   disconnect,
   getSummary,
   IntegrationAlreadyExistsError,
@@ -29,10 +31,20 @@ const eventsQuerySchema = z.object({
     .transform((v) => v === "true"),
 });
 
+const eventSelectionBodySchema = z.object({
+  events: z.array(
+    z.object({
+      name: z.string().min(1),
+      volume: z.number().int().nonnegative().nullable().optional(),
+    })
+  ),
+});
+
 function makeDeps(): IntegrationDeps {
   return {
     db,
     repo: integrationRepo,
+    eventDefinitions: eventDefinitionRepo,
     posthog: posthog as unknown as IntegrationDeps["posthog"],
     webhookBaseUrl: process.env.WEBHOOK_BASE_URL ?? "",
   };
@@ -162,6 +174,32 @@ export const integrationApp = new Hono()
           return c.json({ error: { code: "integration_not_found" } }, 404);
         }
         return c.json(events, 200);
+      } catch (err) {
+        const mapped = mapPosthogError(err);
+        if (mapped) {
+          if (mapped.retryAfter) c.header("Retry-After", mapped.retryAfter);
+          return c.json(mapped.body, mapped.status);
+        }
+        throw err;
+      }
+    }
+  )
+  .post(
+    "/api/integrations/posthog/events/selection",
+    zValidator("json", eventSelectionBodySchema),
+    async (c) => {
+      const customerId = c.req.header("x-customer-id")!;
+      const { events } = c.req.valid("json");
+
+      try {
+        const result = await saveEventSelection(makeDeps(), {
+          customerId,
+          events,
+        });
+        if (result === null) {
+          return c.json({ error: { code: "integration_not_found" } }, 404);
+        }
+        return c.json(result, 200);
       } catch (err) {
         const mapped = mapPosthogError(err);
         if (mapped) {

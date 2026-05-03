@@ -12,6 +12,7 @@ const SIGNATURE_HEADER = "x-notify-signature";
 
 export type TrackEventFn = (
   customerId: string,
+  integrationId: string,
   externalId: string,
   eventName: string,
   properties?: Record<string, unknown>,
@@ -30,16 +31,19 @@ function jsonError(c: Context, status: 400 | 401 | 404, code: string, message: s
 export function createWebhookHandler(deps: HandlerDeps) {
   return async (c: Context) => {
     const customerId = c.req.param("customerId");
+
     if (!customerId) {
       return jsonError(c, 400, "missing_customer_id", "Missing customerId path param");
     }
 
     const signature = c.req.header(SIGNATURE_HEADER);
+
     if (!signature) {
       return jsonError(c, 401, "missing_signature", "Missing X-Notify-Signature header");
     }
 
     const integration = await findByCustomerAndProvider(deps.db, customerId, "posthog");
+
     if (!integration) {
       return jsonError(c, 404, "integration_not_found", "No PostHog integration for customer");
     }
@@ -87,6 +91,7 @@ export function createWebhookHandler(deps: HandlerDeps) {
 
     await deps.trackEvent(
       customerId,
+      integration.id,
       translated.externalId,
       translated.event,
       translated.properties,
