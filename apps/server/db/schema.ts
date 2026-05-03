@@ -59,7 +59,6 @@ export const PosthogIntegrationConfigSchema = z.object({
   project_id: z.string(),
   region: PosthogRegionSchema.default("us"),
   hog_function_id: z.string().nullable(),
-  webhook_secret_encrypted: z.string(),
 });
 
 export type PosthogIntegrationConfig = z.infer<typeof PosthogIntegrationConfigSchema>;

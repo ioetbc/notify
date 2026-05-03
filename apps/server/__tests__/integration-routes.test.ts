@@ -21,11 +21,13 @@ class PosthogTransientError extends Error {
 const mockCreateHogFunction = mock<any>();
 const mockListRecentEvents = mock<any>();
 const mockUpdateHogFunctionFilters = mock<any>();
+const mockDeleteHogFunction = mock<any>();
 
 mock.module("../services/posthog", () => ({
   createHogFunction: mockCreateHogFunction,
   listRecentEvents: mockListRecentEvents,
   updateHogFunctionFilters: mockUpdateHogFunctionFilters,
+  deleteHogFunction: mockDeleteHogFunction,
   PosthogAuthError,
   PosthogTransientError,
 }));
@@ -69,6 +71,7 @@ beforeEach(async () => {
   mockCreateHogFunction.mockReset();
   mockListRecentEvents.mockReset();
   mockUpdateHogFunctionFilters.mockReset();
+  mockDeleteHogFunction.mockReset();
 });
 
 function request(
@@ -292,19 +295,29 @@ describe("POST /api/integrations/posthog/events/selection", () => {
 });
 
 describe("DELETE /api/integrations/posthog", () => {
-  it("removes the row and returns 204", async () => {
+  it("removes the remote hog function, removes the row, and returns 204", async () => {
     await seedCustomer();
     mockCreateHogFunction.mockResolvedValue({ hogFunctionId: "hf-1" });
+    mockDeleteHogFunction.mockResolvedValue(undefined);
     await request("/api/integrations/posthog/connect", {
       method: "POST",
       body: JSON.stringify({ personal_api_key: "k", project_id: "1" }),
     });
+    await request("/api/integrations/posthog/events/selection", {
+      method: "POST",
+      body: JSON.stringify({ events: [{ name: "purchase", volume: 9 }] }),
+    });
+    mockDeleteHogFunction.mockClear();
 
     const res = await request("/api/integrations/posthog", { method: "DELETE" });
     expect(res.status).toBe(204);
 
     const rows = await testDb.select().from(customerIntegration);
     expect(rows).toHaveLength(0);
+    expect(mockDeleteHogFunction).toHaveBeenCalledWith(
+      expect.anything(),
+      { hogFunctionId: "hf-1" }
+    );
   });
 
   it("returns 404 when no integration exists", async () => {

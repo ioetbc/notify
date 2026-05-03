@@ -10,7 +10,6 @@ export type PosthogClientConfig = z.input<typeof PosthogClientConfigSchema>;
 
 export const CreateHogFunctionArgsSchema = z.object({
   webhookUrl: z.string().url(),
-  webhookSecret: z.string().min(1),
   eventNames: z.array(z.string().min(1)),
   customerId: z.string().min(1),
 });
@@ -25,6 +24,12 @@ export const UpdateHogFunctionFiltersArgsSchema = z.object({
 export type UpdateHogFunctionFiltersArgs = z.infer<
   typeof UpdateHogFunctionFiltersArgsSchema
 >;
+
+export const DeleteHogFunctionArgsSchema = z.object({
+  hogFunctionId: z.string().min(1),
+});
+
+export type DeleteHogFunctionArgs = z.infer<typeof DeleteHogFunctionArgsSchema>;
 
 export const ListRecentEventsArgsSchema = z.object({
   days: z.number().int().positive().default(30),

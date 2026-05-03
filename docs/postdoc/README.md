@@ -35,7 +35,7 @@ The v1 work is split into one prerequisite chunk and four parallel chunks. Each 
 | 0 | [schema-and-repository.md](./schema-and-repository.md) | DB | `apps/server/db/schema.ts`, `apps/server/drizzle/*`, `apps/server/repository/integration/` |
 | A | [posthog-client.md](./posthog-client.md) | Backend (pure) | `apps/server/services/posthog/` |
 | B | [connect-flow-api.md](./connect-flow-api.md) | Backend | `apps/server/services/integration/`, `apps/server/functions/public/integration.ts` |
-| C | [inbound-webhook.md](./inbound-webhook.md) | Backend | `apps/server/functions/posthog-webhook/`, HMAC verify utility |
+| C | [inbound-webhook.md](./inbound-webhook.md) | Backend | `apps/server/functions/posthog-webhook/`, PostHog payload translation |
 | D | [client-ui.md](./client-ui.md) | Frontend | `apps/client/src/pages/integrations/`, related components |
 
 ## Shared contracts (do not modify outside Chunk 0)

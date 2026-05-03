@@ -1,4 +1,3 @@
-import { mockIntegrationsApi } from './integrations.mock';
 import {
   IntegrationApiError,
   type ConnectInput,
@@ -21,9 +20,6 @@ const CUSTOMER_ID = '00000000-0000-0000-0000-000000000001';
 const apiBase = (import.meta.env.VITE_PUBLIC_API_URL ?? '')
   .toString()
   .replace(/\/+$/, '');
-const mockEnv = import.meta.env.VITE_INTEGRATIONS_MOCK;
-const useMock =
-  mockEnv === undefined ? apiBase === '' : String(mockEnv) === 'true';
 
 async function request<T>(
   path: string,
@@ -72,7 +68,7 @@ async function request<T>(
   return (await res.json()) as T;
 }
 
-const realIntegrationsApi = {
+export const integrationsApi = {
   async get(): Promise<IntegrationSummary | null> {
     try {
       return await request<IntegrationSummary>('/api/integrations/posthog');
@@ -122,5 +118,3 @@ const realIntegrationsApi = {
     return request<void>('/api/integrations/posthog', { method: 'DELETE' });
   },
 };
-
-export const integrationsApi = useMock ? mockIntegrationsApi : realIntegrationsApi;

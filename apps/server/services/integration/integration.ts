@@ -1,4 +1,3 @@
-import { randomBytes } from "crypto";
 import type {
   CustomerIntegration,
   Db,
@@ -25,7 +24,6 @@ type PosthogIntegrationContext = {
   row: CustomerIntegration;
   config: PosthogIntegrationConfig;
   posthogConfig: PosthogConfig;
-  webhookSecret: string;
 };
 
 export class IntegrationAlreadyExistsError extends Error {
@@ -40,7 +38,6 @@ export type PosthogClient = {
     cfg: PosthogConfig,
     args: {
       webhookUrl: string;
-      webhookSecret: string;
       eventNames: string[];
       customerId: string;
     }
@@ -52,6 +49,10 @@ export type PosthogClient = {
   updateHogFunctionFilters: (
     cfg: PosthogConfig,
     args: { hogFunctionId: string; eventNames: string[] }
+  ) => Promise<void>;
+  deleteHogFunction: (
+    cfg: PosthogConfig,
+    args: { hogFunctionId: string }
   ) => Promise<void>;
 };
 
@@ -93,13 +94,11 @@ export async function connect(
 
   if (existing) throw new IntegrationAlreadyExistsError();
 
-  const webhookSecret = randomBytes(32).toString("hex");
   const initialConfig: PosthogIntegrationConfig = {
     personal_api_key_encrypted: encode(input.personalApiKey),
     project_id: input.projectId,
     region: input.region,
     hog_function_id: null,
-    webhook_secret_encrypted: encode(webhookSecret),
   };
 
   const created = await deps.repo.create(deps.db, {
@@ -194,6 +193,12 @@ export async function disconnect(
   const context = await getPosthogIntegrationContext(deps, input.customerId);
   if (!context) return false;
 
+  if (context.config.hog_function_id) {
+    await deps.posthog.deleteHogFunction(context.posthogConfig, {
+      hogFunctionId: context.config.hog_function_id,
+    });
+  }
+
   await deps.repo.deleteIntegration(deps.db, context.row.id);
   return true;
 }
@@ -218,7 +223,6 @@ async function getPosthogIntegrationContext(
       projectId: config.project_id,
       baseUrl: POSTHOG_REGION_HOST[config.region ?? "us"],
     },
-    webhookSecret: decode(config.webhook_secret_encrypted),
   };
 }
 
@@ -239,7 +243,6 @@ async function syncHogFunctionFilters(
       context.posthogConfig,
       {
         webhookUrl: buildWebhookUrl(deps.webhookBaseUrl, customerId),
-        webhookSecret: context.webhookSecret,
         eventNames: selectedNames,
         customerId,
       }

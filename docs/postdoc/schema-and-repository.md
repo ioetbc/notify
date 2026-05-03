@@ -30,7 +30,6 @@ export const PosthogIntegrationConfigSchema = z.object({
   personal_api_key_encrypted: z.string(),
   project_id: z.string(),
   hog_function_id: z.string().nullable(),    // null between row insert and hog function creation
-  webhook_secret_encrypted: z.string(),
 });
 
 export type PosthogIntegrationConfig = z.infer<typeof PosthogIntegrationConfigSchema>;

@@ -84,11 +84,7 @@ Component tests with Vitest + Testing Library. Cover:
 - `EventPicker` renders the volume-sorted list and updates the button count when checkboxes toggle.
 - `ConnectedState` disconnect flow shows the modal, calls `DELETE /`, and returns to disconnected.
 
-> **v1 note:** the client app does not yet have Vitest or `@testing-library/react` installed (see root `package.json`). Component tests are deferred until the test rig is set up — tracked as TODO in this chunk's PR. Manual smoke-test against the mocked API is the v1 verification.
-
-## API client / mocking
-
-While Chunk B is in flight, the typed wrapper at `lib/api/integrations.ts` honours an opt-in mock: when `VITE_INTEGRATIONS_MOCK=true` (or no API host is configured), it resolves against an in-memory implementation that matches the documented contract. This lets the UI ship and be exercised end-to-end before the backend deploys. Flip the env var off to hit the real routes once they exist.
+> **v1 note:** the client app does not yet have Vitest or `@testing-library/react` installed (see root `package.json`). Component tests are deferred until the test rig is set up — tracked as TODO in this chunk's PR. Manual smoke-test against the real API is the v1 verification.
 
 ## Acceptance
 

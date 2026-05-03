@@ -25,6 +25,7 @@ const mockSetPosthogEventSelection = mock<any>();
 const mockListEventSelectionByIntegration = mock<any>();
 const mockCreateHogFunction = mock<any>();
 const mockUpdateHogFunctionFilters = mock<any>();
+const mockDeleteHogFunction = mock<any>();
 const mockListRecentEvents = mock<any>();
 
 function fakeRow(overrides?: Partial<CustomerIntegration>): CustomerIntegration {
@@ -37,7 +38,6 @@ function fakeRow(overrides?: Partial<CustomerIntegration>): CustomerIntegration 
       project_id: PROJECT_ID,
       region: "eu",
       hog_function_id: null,
-      webhook_secret_encrypted: Buffer.from("ws").toString("base64"),
     },
     connectedAt: new Date(),
     ...overrides,
@@ -49,6 +49,7 @@ function makeDeps(): IntegrationDeps {
     createHogFunction: mockCreateHogFunction,
     listRecentEvents: mockListRecentEvents,
     updateHogFunctionFilters: mockUpdateHogFunctionFilters,
+    deleteHogFunction: mockDeleteHogFunction,
   };
   return {
     db: {} as any,
@@ -77,6 +78,7 @@ beforeEach(() => {
   mockListEventSelectionByIntegration.mockResolvedValue([]);
   mockCreateHogFunction.mockReset();
   mockUpdateHogFunctionFilters.mockReset();
+  mockDeleteHogFunction.mockReset();
   mockListRecentEvents.mockReset();
 });
 
@@ -106,13 +108,6 @@ describe("connect", () => {
     expect(createArgs.config.personal_api_key_encrypted).toBe(
       Buffer.from(PERSONAL_API_KEY).toString("base64")
     );
-    // webhook_secret is a 32-byte hex string (64 chars when decoded)
-    const decodedSecret = Buffer.from(
-      createArgs.config.webhook_secret_encrypted,
-      "base64"
-    ).toString("utf-8");
-    expect(decodedSecret).toMatch(/^[0-9a-f]{64}$/);
-
     expect(mockCreateHogFunction).not.toHaveBeenCalled();
     expect(mockUpdateConfig).not.toHaveBeenCalled();
     expect(mockDeleteIntegration).not.toHaveBeenCalled();
@@ -153,17 +148,47 @@ describe("connect", () => {
 });
 
 describe("disconnect", () => {
-  it("deletes the row but does not call the client", async () => {
+  it("deletes the remote hog function before deleting the row", async () => {
+    mockFindByCustomerAndProvider.mockResolvedValue(
+      fakeRow({
+        config: {
+          personal_api_key_encrypted: Buffer.from(PERSONAL_API_KEY).toString("base64"),
+          project_id: PROJECT_ID,
+          region: "eu",
+          hog_function_id: HOG_FUNCTION_ID,
+        },
+      })
+    );
+    mockDeleteHogFunction.mockResolvedValue(undefined);
+    mockDeleteIntegration.mockResolvedValue(undefined);
+
+    const ok = await disconnect(makeDeps(), { customerId: CUSTOMER_ID });
+
+    expect(ok).toBe(true);
+    expect(mockDeleteHogFunction).toHaveBeenCalledWith(
+      {
+        personalApiKey: PERSONAL_API_KEY,
+        projectId: PROJECT_ID,
+        baseUrl: "https://eu.posthog.com",
+      },
+      { hogFunctionId: HOG_FUNCTION_ID }
+    );
+    expect(mockDeleteIntegration).toHaveBeenCalledTimes(1);
+    expect(mockDeleteIntegration.mock.calls[0][1]).toBe(INTEGRATION_ID);
+    expect(mockCreateHogFunction).not.toHaveBeenCalled();
+    expect(mockListRecentEvents).not.toHaveBeenCalled();
+  });
+
+  it("deletes only the row when there is no remote hog function yet", async () => {
     mockFindByCustomerAndProvider.mockResolvedValue(fakeRow());
     mockDeleteIntegration.mockResolvedValue(undefined);
 
     const ok = await disconnect(makeDeps(), { customerId: CUSTOMER_ID });
 
     expect(ok).toBe(true);
+    expect(mockDeleteHogFunction).not.toHaveBeenCalled();
     expect(mockDeleteIntegration).toHaveBeenCalledTimes(1);
     expect(mockDeleteIntegration.mock.calls[0][1]).toBe(INTEGRATION_ID);
-    expect(mockCreateHogFunction).not.toHaveBeenCalled();
-    expect(mockListRecentEvents).not.toHaveBeenCalled();
   });
 
   it("returns false when no integration exists", async () => {
@@ -274,7 +299,6 @@ describe("saveEventSelection", () => {
           project_id: PROJECT_ID,
           region: "eu",
           hog_function_id: HOG_FUNCTION_ID,
-          webhook_secret_encrypted: Buffer.from("ws").toString("base64"),
         },
       })
     );

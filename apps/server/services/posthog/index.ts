@@ -1,6 +1,7 @@
 export {
   createHogFunction,
   updateHogFunctionFilters,
+  deleteHogFunction,
   listRecentEvents,
   PosthogAuthError,
   PosthogClientError,
@@ -10,6 +11,7 @@ export type {
   PosthogClientConfig,
   CreateHogFunctionArgs,
   UpdateHogFunctionFiltersArgs,
+  DeleteHogFunctionArgs,
   ListRecentEventsArgs,
   RecentEvent,
 } from "./types";

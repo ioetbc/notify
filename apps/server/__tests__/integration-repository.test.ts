@@ -20,7 +20,6 @@ const baseConfig: PosthogIntegrationConfig = {
   personal_api_key_encrypted: "cGgtYWJj",
   project_id: "1",
   hog_function_id: null,
-  webhook_secret_encrypted: "c2VjcmV0",
 };
 
 async function seedCustomer(id = CUSTOMER_ID, email = "c@example.com") {

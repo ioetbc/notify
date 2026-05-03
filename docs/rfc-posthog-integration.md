@@ -59,7 +59,7 @@ The flow is split across backend endpoints so the same wiring is shared by the d
 4. UI fetches recent events and presents the **event picker** — multi-select of returned events, with a "show all events" toggle for autocaptured (`$pageview` etc.) and the long tail.
 5. UI calls `POST /integrations/posthog/events/selection` with selected event names. Notify:
    1. Persists the selected event definitions.
-   2. Creates the destination-type hog function on the first non-empty selection. The function is templated to compute `HMAC-SHA256(webhook_secret, raw_body)` and POST every matching event to `https://api.notify.com/webhooks/posthog/:customerId` with header `X-Notify-Signature: <hmac>`.
+   2. Creates the destination-type hog function on the first non-empty selection. The function is templated to POST every matching event to `https://api.notify.com/webhooks/posthog/:customerId`.
    3. Updates the hog function filters on subsequent saves. An empty selection uses a sentinel event filter rather than an empty filter list.
    4. Stores the returned `hog_function_id` on the integration row.
 6. Starter workflow creation is deferred until template selection is implemented separately.
@@ -96,8 +96,7 @@ For `provider = 'posthog'`, `config` contains:
 {
   "personal_api_key_encrypted": "...",
   "project_id": "12345",
-  "hog_function_id": "...",
-  "webhook_secret_encrypted": "..."
+  "hog_function_id": "..."
 }
 ```
 
@@ -109,17 +108,14 @@ No changes to `event`, `user`, `workflow`, or any existing table in v1.
 
 **Inbound endpoint:** `POST /webhooks/posthog/:customerId`
 
-**Headers:**
-- `X-Notify-Signature: <hex hmac-sha256>`
-- `Content-Type: application/json`
+**Headers:** `Content-Type: application/json`
 
 **Body:** PostHog's standard event payload (`event`, `distinct_id`, `properties`, `timestamp`, `uuid`).
 
 **Verification:**
 1. Look up `customer_integration` by `:customerId` and `provider = 'posthog'`. 404 if missing.
-2. Compute `HMAC-SHA256(webhook_secret, raw_request_body)` using the **raw bytes** of the request body — before any JSON parsing or middleware reserialization. SST/Hono lambdas need the raw-body buffer captured before middleware touches it.
-3. Constant-time compare against `X-Notify-Signature`. 401 on mismatch.
-4. On match, enqueue an event-ingest job to SQS keyed by `(customerId, distinct_id, event_name)`. The downstream consumer is the same path that handles direct-API events: look up the user by `(customerId, externalId=distinct_id)`, persist to `event`, fan out to active workflow enrollments.
+2. Parse and validate the JSON payload.
+3. Enqueue an event-ingest job to SQS keyed by `(customerId, distinct_id, event_name)`. The downstream consumer is the same path that handles direct-API events: look up the user by `(customerId, externalId=distinct_id)`, persist to `event`, fan out to active workflow enrollments.
 
 **Filter scoping:** the hog function only forwards events whose name appears in at least one active workflow's trigger. When a workflow is published, paused, archived, or its trigger event changes, the hog function's filter list is reconciled. Stale filters (events no longer referenced by any active workflow) are tolerated and ignored on our side via the workflow `status` enum; a weekly GC removes them from the hog function.
 

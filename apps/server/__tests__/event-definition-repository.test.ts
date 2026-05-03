@@ -41,7 +41,6 @@ beforeEach(async () => {
       project_id: "42",
       region: "us",
       hog_function_id: "hf",
-      webhook_secret_encrypted: "secret",
     },
   });
 });

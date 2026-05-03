@@ -13,17 +13,13 @@ import { customer } from "../db/schema";
 import type { PosthogIntegrationConfig } from "../db/schema";
 import { create as createIntegration } from "../repository/integration";
 import { createWebhookApp } from "../functions/posthog-webhook/handler";
-import { computeSignature } from "../services/posthog-webhook/verify";
 
 const CUSTOMER_ID = "00000000-0000-0000-0000-0000000000aa";
-const SECRET = "test-webhook-secret";
-const SECRET_B64 = Buffer.from(SECRET, "utf-8").toString("base64");
 
 const baseConfig: PosthogIntegrationConfig = {
   personal_api_key_encrypted: "cGgtYWJj",
   project_id: "1",
   hog_function_id: null,
-  webhook_secret_encrypted: SECRET_B64,
 };
 
 let db: TestDb;
@@ -62,16 +58,11 @@ async function seedIntegration(customerId = CUSTOMER_ID) {
 function makeRequest(opts: {
   customerId?: string;
   body: string;
-  signature?: string | null;
   contentType?: string;
 }) {
   const headers: Record<string, string> = {
     "Content-Type": opts.contentType ?? "application/json",
   };
-  if (opts.signature !== null) {
-    headers["X-Notify-Signature"] =
-      opts.signature ?? computeSignature(SECRET, opts.body);
-  }
   return new Request(
     `http://localhost/webhooks/posthog/${opts.customerId ?? CUSTOMER_ID}`,
     {
@@ -94,11 +85,10 @@ beforeEach(async () => {
   await resetTestDb(client);
   trackEventCalls = [];
   trackEventReturn = { id: "evt-1" };
-  delete process.env.POSTHOG_WEBHOOK_SKIP_SIGNATURE;
 });
 
 describe("posthog webhook handler", () => {
-  it("happy path: matching signature triggers ingest, returns 202", async () => {
+  it("happy path: valid payload triggers ingest, returns 202", async () => {
     await seedCustomer();
     await seedIntegration();
 
@@ -133,44 +123,6 @@ describe("posthog webhook handler", () => {
     const res = await buildApp().fetch(makeRequest({ body }));
 
     expect(res.status).toBe(404);
-    expect(trackEventCalls).toHaveLength(0);
-  });
-
-  it("returns 401 on bad signature", async () => {
-    await seedCustomer();
-    await seedIntegration();
-
-    const body = JSON.stringify({ event: "x", distinct_id: "u" });
-    const goodSig = computeSignature(SECRET, body);
-    const badSig = (goodSig[0] === "a" ? "b" : "a") + goodSig.slice(1);
-
-    const res = await buildApp().fetch(makeRequest({ body, signature: badSig }));
-
-    expect(res.status).toBe(401);
-    expect(trackEventCalls).toHaveLength(0);
-  });
-
-  it("can skip signature verification with an explicit debug env var", async () => {
-    process.env.POSTHOG_WEBHOOK_SKIP_SIGNATURE = "true";
-    await seedCustomer();
-    await seedIntegration();
-
-    const body = JSON.stringify({ event: "x", distinct_id: "u" });
-    const res = await buildApp().fetch(makeRequest({ body, signature: "bad" }));
-
-    expect(res.status).toBe(202);
-    expect(trackEventCalls).toHaveLength(1);
-    expect((trackEventCalls[0] as any[])[2]).toBe("user_001");
-  });
-
-  it("returns 401 when signature header is missing", async () => {
-    await seedCustomer();
-    await seedIntegration();
-
-    const body = JSON.stringify({ event: "x", distinct_id: "u" });
-    const res = await buildApp().fetch(makeRequest({ body, signature: null }));
-
-    expect(res.status).toBe(401);
     expect(trackEventCalls).toHaveLength(0);
   });
 
@@ -223,11 +175,7 @@ describe("posthog webhook handler", () => {
     expect((trackEventCalls[0] as any[])[3]).toBe("$pageview");
   });
 
-  it("body re-stringification footgun: signature must match raw bytes", async () => {
-    // PostHog sends the body exactly as-is; if we re-stringified after parsing
-    // (e.g. via JSON.parse → JSON.stringify) the signature would mismatch
-    // because key ordering / whitespace would differ. This test simulates a
-    // body with key ordering and whitespace that JSON.stringify would change.
+  it("accepts JSON bodies with harmless whitespace", async () => {
     await seedCustomer();
     await seedIntegration();
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import {
   createHogFunction,
+  deleteHogFunction,
   listRecentEvents,
   updateHogFunctionFilters,
   PosthogAuthError,
@@ -69,7 +70,6 @@ describe("createHogFunction", () => {
 
     const result = await createHogFunction(cfg, {
       webhookUrl: "https://api.notify.com/webhooks/posthog/cust-1",
-      webhookSecret: "deadbeef",
       eventNames: ["signup", "purchase"],
       customerId: "cust-1",
     });
@@ -90,7 +90,6 @@ describe("createHogFunction", () => {
     expect(typeof body.hog).toBe("string");
     expect(body.inputs).toEqual({
       webhook_url: { value: "https://api.notify.com/webhooks/posthog/cust-1" },
-      webhook_secret: { value: "deadbeef" },
     });
     const filters = body.filters as { events: Array<{ id: string }> };
     expect(filters.events.map((e) => e.id)).toEqual(["signup", "purchase"]);
@@ -119,6 +118,22 @@ describe("updateHogFunctionFilters", () => {
         ],
       },
     });
+  });
+});
+
+describe("deleteHogFunction", () => {
+  it("soft-deletes the project hog function via PATCH", async () => {
+    nextResponses.push({ status: 200, body: {} });
+
+    await deleteHogFunction(cfg, { hogFunctionId: "hf_abc" });
+
+    expect(calls).toHaveLength(1);
+    const call = calls[0];
+    expect(call.method).toBe("PATCH");
+    expect(call.url).toBe(
+      "https://us.posthog.com/api/projects/42/hog_functions/hf_abc/"
+    );
+    expect(call.body).toEqual({ deleted: true });
   });
 });
 

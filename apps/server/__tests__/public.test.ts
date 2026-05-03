@@ -7,6 +7,7 @@ const mockUpdateUserAttributes = mock<any>();
 const mockCreateEvent = mock<any>();
 const mockUpsertSeenPosthogEvent = mock<any>();
 const mockFindActiveWorkflowsByTriggerEvent = mock<any>();
+const mockFindActiveWorkflowTriggers = mock<any>();
 const mockCreateWorkflowEnrollment = mock<any>();
 
 mock.module("../repository/public", () => ({
@@ -16,6 +17,7 @@ mock.module("../repository/public", () => ({
   createEvent: mockCreateEvent,
   upsertSeenPosthogEvent: mockUpsertSeenPosthogEvent,
   findActiveWorkflowsByTriggerEvent: mockFindActiveWorkflowsByTriggerEvent,
+  findActiveWorkflowTriggers: mockFindActiveWorkflowTriggers,
   createWorkflowEnrollment: mockCreateWorkflowEnrollment,
 }));
 
@@ -26,6 +28,7 @@ mock.module("../repository/public/public", () => ({
   createEvent: mockCreateEvent,
   upsertSeenPosthogEvent: mockUpsertSeenPosthogEvent,
   findActiveWorkflowsByTriggerEvent: mockFindActiveWorkflowsByTriggerEvent,
+  findActiveWorkflowTriggers: mockFindActiveWorkflowTriggers,
   createWorkflowEnrollment: mockCreateWorkflowEnrollment,
 }));
 
@@ -113,6 +116,8 @@ beforeEach(() => {
   mockCreateEvent.mockReset();
   mockUpsertSeenPosthogEvent.mockReset();
   mockFindActiveWorkflowsByTriggerEvent.mockReset();
+  mockFindActiveWorkflowTriggers.mockReset();
+  mockFindActiveWorkflowTriggers.mockResolvedValue([]);
   mockCreateWorkflowEnrollment.mockReset();
   mockFindStepsByWorkflowId.mockReset();
   mockFindEdgesByWorkflowId.mockReset();

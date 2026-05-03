@@ -5,12 +5,14 @@ import {
 } from "./hog-template";
 import {
   CreateHogFunctionArgsSchema,
+  DeleteHogFunctionArgsSchema,
   HogFunctionCreateResponseSchema,
   HogQlQueryResponseSchema,
   ListRecentEventsArgsSchema,
   PosthogClientConfigSchema,
   UpdateHogFunctionFiltersArgsSchema,
   type CreateHogFunctionArgs,
+  type DeleteHogFunctionArgs,
   type ListRecentEventsArgs,
   type PosthogClientConfig,
   type RecentEvent,
@@ -119,7 +121,6 @@ export async function createHogFunction(
       inputs_schema: HOG_INPUTS_SCHEMA,
       inputs: {
         webhook_url: { value: a.webhookUrl },
-        webhook_secret: { value: a.webhookSecret },
       },
       filters: buildEventFilter(a.eventNames),
     },
@@ -139,6 +140,20 @@ export async function updateHogFunctionFilters(
     method: "PATCH",
     path: `/api/projects/${projectId}/hog_functions/${a.hogFunctionId}/`,
     body: { filters: buildEventFilter(a.eventNames) },
+  });
+}
+
+export async function deleteHogFunction(
+  cfg: PosthogClientConfig,
+  args: DeleteHogFunctionArgs
+): Promise<void> {
+  const a = DeleteHogFunctionArgsSchema.parse(args);
+  const projectId = PosthogClientConfigSchema.parse(cfg).projectId;
+
+  await request(cfg, {
+    method: "PATCH",
+    path: `/api/projects/${projectId}/hog_functions/${a.hogFunctionId}/`,
+    body: { deleted: true },
   });
 }
 

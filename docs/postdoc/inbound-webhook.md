@@ -1,17 +1,16 @@
 # Chunk C — Inbound Webhook
 
-Receives PostHog events at `/webhooks/posthog/:customerId`, verifies HMAC, and enqueues the event onto the existing event-ingest path.
+Receives PostHog events at `/webhooks/posthog/:customerId` and enqueues the event onto the existing event-ingest path.
 
 ## Depends on
 
 - **Chunk 0** for `customerIntegration` and `IntegrationRepository`.
-- **No dependency on Chunk A or B** — runs entirely in parallel with them. The webhook only reads the integration row to fetch the secret.
+- **No dependency on Chunk A or B** — runs entirely in parallel with them. The webhook only reads the integration row to confirm the customer has connected PostHog.
 
 ## Owns these files
 
 - `apps/server/functions/posthog-webhook/index.ts` — new Lambda entry point
 - `apps/server/functions/posthog-webhook/handler.ts` — request handler logic
-- `apps/server/services/posthog-webhook/verify.ts` — HMAC verification utility
 - `apps/server/services/posthog-webhook/translate.ts` — maps PostHog event payload → internal event shape
 - `sst.config.ts` — add a new function and route binding for the webhook (this is the only shared-file edit)
 - `apps/server/__tests__/posthog-webhook-handler.test.ts`
@@ -28,7 +27,7 @@ Receives PostHog events at `/webhooks/posthog/:customerId`, verifies HMAC, and e
 `POST /webhooks/posthog/:customerId`
 
 Headers:
-- `X-Notify-Signature: <hex hmac-sha256>`
+- `Content-Type: application/json`
 
 Body: PostHog hog function payload. Expected fields used:
 - `event` (string, required)
@@ -41,14 +40,12 @@ Other fields ignored.
 
 ## Handler flow
 
-1. **Capture raw body** as bytes before any framework JSON parsing. Hono lambdas: use `c.req.raw.arrayBuffer()` and parse JSON manually after HMAC. If you parse first and re-stringify, signatures will mismatch — this is the classic footgun.
+1. Read the raw body from the Hono request and parse it as JSON.
 2. Look up integration by `(customerId, "posthog")`. 404 if missing.
-3. Decode the webhook secret.
-4. Compute `HMAC-SHA256(secret, rawBody)`. Constant-time compare against header. 401 on mismatch.
-5. Parse the JSON. 400 on invalid shape (Zod-validate against `PosthogEventPayloadSchema`).
-6. Translate to the internal event shape: `{ user_id: distinct_id, event: event, properties, timestamp }`.
-7. Call the existing event-ingest function (the same one `/events` calls). Do not duplicate user-lookup or workflow-fanout logic — that is explicitly out of scope for this chunk.
-8. Return 202 if accepted, 4xx for client errors. Never return 5xx for downstream failures the caller can't retry safely; let the existing ingest path's SQS handle that.
+3. Validate the JSON shape with `PosthogEventPayloadSchema`.
+4. Translate to the internal event shape: `{ user_id: distinct_id, event: event, properties, timestamp }`.
+5. Call the existing event-ingest function (the same one `/events` calls). Do not duplicate user-lookup or workflow-fanout logic — that is explicitly out of scope for this chunk.
+6. Return 202 if accepted, 4xx for client errors. Never return 5xx for downstream failures the caller can't retry safely; let the existing ingest path's SQS handle that.
 
 ## Why no idempotency yet
 
@@ -64,15 +61,9 @@ Add to `sst.config.ts`:
 
 ## Tests
 
-`verify.ts` (pure):
-- Valid signature passes.
-- One-byte-different signature fails.
-- Constant-time comparison (no timing leak — assert via test that both branches take similar time, or just verify use of `crypto.timingSafeEqual`).
-
 `handler.ts` (integration, real DB, stubbed downstream ingest):
-- Happy path: matching signature → ingest called with translated payload → 202.
+- Happy path: valid payload → ingest called with translated payload → 202.
 - Missing integration → 404.
-- Bad signature → 401.
 - Malformed body → 400 (and ingest not called).
 - Missing `distinct_id` → 400.
 - Unknown event name (no workflow listening) → 202 (ingest decides what to do).
@@ -80,6 +71,6 @@ Add to `sst.config.ts`:
 ## Acceptance
 
 - Endpoint deploys via `sst deploy --stage <dev>` and is reachable.
-- A manually crafted POST with the right HMAC reaches the existing event-ingest path and creates an `event` row.
+- A manually crafted JSON POST reaches the existing event-ingest path and creates an `event` row.
 - All tests pass via `sst shell -- bun test`.
 - No changes to files outside the "Owns" list (except the `sst.config.ts` additions, which are scoped to the new function only).

@@ -39,15 +39,14 @@ All routes require an authenticated customer (use the existing auth middleware o
 ### `GET /` flow
 
 1. Look up the integration by `(customerId, "posthog")`. 404 with `{ error: { code: "integration_not_found" } }` if missing.
-2. Return a summary — never the encrypted key, secret, or hog function id.
+2. Return a summary — never the encrypted key or hog function id.
 
 ### `POST /connect` flow
 
 1. Validate body with Zod. `region` defaults to `"us"` when omitted; resolves to `https://us.posthog.com` or `https://eu.posthog.com` for the PostHog client `baseUrl`.
 2. Reject if an integration already exists for this `(customer, posthog)` pair (return 409).
-3. Generate a 32-byte hex `webhook_secret` via `crypto.randomBytes`.
-4. Insert the integration row with `hog_function_id: null`, the encoded `personal_api_key` and `webhook_secret`, and the chosen `region` (Chunk 0 stores keys base64-encoded for now).
-5. Return `{ integration_id }`.
+3. Insert the integration row with `hog_function_id: null`, the encoded `personal_api_key`, and the chosen `region` (Chunk 0 stores keys base64-encoded for now).
+4. Return `{ integration_id }`.
 
 Connect deliberately does not create a hog function. The function is created on the first non-empty event selection so it never exists with an ambiguous empty filter.
 
@@ -70,7 +69,7 @@ Connect deliberately does not create a hog function. The function is created on 
 ### `DELETE /`
 
 1. Look up the integration. 404 if missing.
-2. **Do not** delete the hog function from PostHog. Leave it; the customer can delete it manually if they want. Document this trade-off — we'd rather strand a no-op function than risk deleting the wrong one due to a stale id.
+2. If a `hog_function_id` exists, delete that hog function from PostHog.
 3. `repo.delete(id)`.
 4. Return 204.
 
@@ -88,7 +87,7 @@ Service-level (mock the repo and the client):
 - Connect rejects when an integration already exists.
 - Event selection creates the hog function on first non-empty selection.
 - Event selection updates filters and marks omitted events inactive when the hog function exists.
-- Disconnect deletes the row but does not call the client.
+- Disconnect deletes the remote hog function when present, then deletes the row.
 
 Route-level (in-process Hono, real DB, stubbed PostHog client):
 
