@@ -1,13 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import {
-  createHogFunction,
-  deleteHogFunction,
-  listRecentEvents,
-  updateHogFunctionFilters,
+  httpPosthogAdapter,
+  PosthogApiError,
   PosthogAuthError,
-  PosthogClientError,
   PosthogTransientError,
-  type PosthogClientConfig,
+  type PosthogCreds,
 } from "../services/posthog";
 
 type FetchCall = {
@@ -17,10 +14,7 @@ type FetchCall = {
   body: unknown;
 };
 
-type StubResponse = {
-  status: number;
-  body?: unknown;
-};
+type StubResponse = { status: number; body?: unknown };
 
 let calls: FetchCall[] = [];
 let nextResponses: StubResponse[] = [];
@@ -47,7 +41,7 @@ function stubFetch() {
   }) as typeof fetch;
 }
 
-const cfg: PosthogClientConfig = {
+const creds: PosthogCreds = {
   baseUrl: "https://us.posthog.com",
   personalApiKey: "phx_test_key",
   projectId: "42",
@@ -64,92 +58,18 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-describe("createHogFunction", () => {
-  it("posts to the project hog_functions endpoint with the right body", async () => {
-    nextResponses.push({ status: 201, body: { id: "hf_abc" } });
-
-    const result = await createHogFunction(cfg, {
-      webhookUrl: "https://api.notify.com/webhooks/posthog/cust-1",
-      eventNames: ["signup", "purchase"],
-      customerId: "cust-1",
-    });
-
-    expect(result).toEqual({ hogFunctionId: "hf_abc" });
-    expect(calls).toHaveLength(1);
-    const call = calls[0];
-    expect(call.url).toBe(
-      "https://us.posthog.com/api/projects/42/hog_functions/"
-    );
-    expect(call.method).toBe("POST");
-    expect(call.headers.Authorization).toBe("Bearer phx_test_key");
-
-    const body = call.body as Record<string, unknown>;
-    expect(body.type).toBe("destination");
-    expect(body.name).toBe("Notify — cust-1");
-    expect(body.enabled).toBe(true);
-    expect(typeof body.hog).toBe("string");
-    expect(body.inputs).toEqual({
-      webhook_url: { value: "https://api.notify.com/webhooks/posthog/cust-1" },
-    });
-    const filters = body.filters as { events: Array<{ id: string }> };
-    expect(filters.events.map((e) => e.id)).toEqual(["signup", "purchase"]);
-  });
-});
-
-describe("updateHogFunctionFilters", () => {
-  it("PATCHes only the filters field", async () => {
-    nextResponses.push({ status: 200, body: { id: "hf_abc" } });
-
-    await updateHogFunctionFilters(cfg, {
-      hogFunctionId: "hf_abc",
-      eventNames: ["checkout_started"],
-    });
-
-    expect(calls).toHaveLength(1);
-    const call = calls[0];
-    expect(call.method).toBe("PATCH");
-    expect(call.url).toBe(
-      "https://us.posthog.com/api/projects/42/hog_functions/hf_abc/"
-    );
-    expect(call.body).toEqual({
-      filters: {
-        events: [
-          { id: "checkout_started", name: "checkout_started", type: "events", order: 0 },
-        ],
-      },
-    });
-  });
-});
-
-describe("deleteHogFunction", () => {
-  it("soft-deletes the project hog function via PATCH", async () => {
-    nextResponses.push({ status: 200, body: {} });
-
-    await deleteHogFunction(cfg, { hogFunctionId: "hf_abc" });
-
-    expect(calls).toHaveLength(1);
-    const call = calls[0];
-    expect(call.method).toBe("PATCH");
-    expect(call.url).toBe(
-      "https://us.posthog.com/api/projects/42/hog_functions/hf_abc/"
-    );
-    expect(call.body).toEqual({ deleted: true });
-  });
-});
-
 describe("listRecentEvents", () => {
-  it("posts a HogQL query with defaults and parses the result tuples", async () => {
+  it("posts a HogQL query and parses tuples", async () => {
     nextResponses.push({
       status: 200,
-      body: {
-        results: [
-          ["signup", 120],
-          ["purchase", 87],
-        ],
-      },
+      body: { results: [["signup", 120], ["purchase", 87]] },
     });
 
-    const events = await listRecentEvents(cfg);
+    const events = await httpPosthogAdapter.listRecentEvents(creds, {
+      days: 30,
+      limit: 50,
+      excludePrefixed: true,
+    });
 
     expect(events).toEqual([
       { name: "signup", volume: 120 },
@@ -157,20 +77,21 @@ describe("listRecentEvents", () => {
     ]);
     const call = calls[0];
     expect(call.url).toBe("https://us.posthog.com/api/projects/42/query/");
+    expect(call.headers.Authorization).toBe("Bearer phx_test_key");
     const body = call.body as { query: { kind: string; query: string } };
     expect(body.query.kind).toBe("HogQLQuery");
     expect(body.query.query).toContain("INTERVAL 30 DAY");
-    expect(body.query.query).toContain("NOT startsWith(event, '$')");
     expect(body.query.query).toContain("LIMIT 50");
+    expect(body.query.query).toContain("NOT startsWith(event, '$')");
   });
 
-  it("includes $ events when excludePrefixed is false and respects custom days/limit", async () => {
+  it("omits prefix exclusion when excludePrefixed is false", async () => {
     nextResponses.push({ status: 200, body: { results: [] } });
 
-    await listRecentEvents(cfg, {
+    await httpPosthogAdapter.listRecentEvents(creds, {
       days: 7,
-      excludePrefixed: false,
       limit: 5,
+      excludePrefixed: false,
     });
 
     const body = calls[0].body as { query: { query: string } };
@@ -185,8 +106,110 @@ describe("listRecentEvents", () => {
       body: { results: [["signup", "42"]] },
     });
 
-    const events = await listRecentEvents(cfg);
+    const events = await httpPosthogAdapter.listRecentEvents(creds, {
+      days: 30,
+      limit: 50,
+      excludePrefixed: true,
+    });
     expect(events).toEqual([{ name: "signup", volume: 42 }]);
+  });
+});
+
+describe("reconcileDestination", () => {
+  it("creates a new hog function when current id is null and desired is present", async () => {
+    nextResponses.push({ status: 201, body: { id: "hf_new" } });
+
+    const { hogFunctionId } = await httpPosthogAdapter.reconcileDestination(
+      creds,
+      null,
+      {
+        kind: "present",
+        webhookUrl: "https://api.notify.com/webhooks/posthog/cust-1",
+        eventNames: ["signup", "purchase"],
+        customerId: "cust-1",
+      }
+    );
+
+    expect(hogFunctionId).toBe("hf_new");
+    const call = calls[0];
+    expect(call.method).toBe("POST");
+    expect(call.url).toBe("https://us.posthog.com/api/projects/42/hog_functions/");
+    const body = call.body as Record<string, unknown>;
+    expect(body.type).toBe("destination");
+    expect(body.name).toBe("Notify — cust-1");
+    const filters = body.filters as { events: Array<{ id: string }> };
+    expect(filters.events.map((e) => e.id)).toEqual(["signup", "purchase"]);
+  });
+
+  it("PATCHes filters when current id is set and desired is present", async () => {
+    nextResponses.push({ status: 200, body: { id: "hf_existing" } });
+
+    const { hogFunctionId } = await httpPosthogAdapter.reconcileDestination(
+      creds,
+      "hf_existing",
+      {
+        kind: "present",
+        webhookUrl: "https://x",
+        eventNames: ["checkout_started"],
+        customerId: "cust-1",
+      }
+    );
+
+    expect(hogFunctionId).toBe("hf_existing");
+    const call = calls[0];
+    expect(call.method).toBe("PATCH");
+    expect(call.url).toBe(
+      "https://us.posthog.com/api/projects/42/hog_functions/hf_existing/"
+    );
+    expect(call.body).toEqual({
+      filters: {
+        events: [
+          { id: "checkout_started", name: "checkout_started", type: "events", order: 0 },
+        ],
+      },
+    });
+  });
+
+  it("uses the disabled-sentinel filter when desired is present with empty events", async () => {
+    nextResponses.push({ status: 200, body: {} });
+
+    await httpPosthogAdapter.reconcileDestination(creds, "hf_existing", {
+      kind: "present",
+      webhookUrl: "https://x",
+      eventNames: [],
+      customerId: "cust-1",
+    });
+
+    const filters = (calls[0].body as { filters: { events: Array<{ id: string }> } })
+      .filters;
+    expect(filters.events.map((e) => e.id)).toEqual([
+      "__notify_no_active_posthog_events__",
+    ]);
+  });
+
+  it("soft-deletes when desired is absent and a function exists", async () => {
+    nextResponses.push({ status: 200, body: {} });
+
+    const { hogFunctionId } = await httpPosthogAdapter.reconcileDestination(
+      creds,
+      "hf_existing",
+      { kind: "absent" }
+    );
+
+    expect(hogFunctionId).toBeNull();
+    expect(calls[0].method).toBe("PATCH");
+    expect(calls[0].body).toEqual({ deleted: true });
+  });
+
+  it("is a no-op when desired is absent and no function exists", async () => {
+    const { hogFunctionId } = await httpPosthogAdapter.reconcileDestination(
+      creds,
+      null,
+      { kind: "absent" }
+    );
+
+    expect(hogFunctionId).toBeNull();
+    expect(calls).toHaveLength(0);
   });
 });
 
@@ -194,24 +217,28 @@ describe("error mapping", () => {
   it("401 throws PosthogAuthError", async () => {
     nextResponses.push({ status: 401, body: { detail: "Invalid token" } });
     await expect(
-      updateHogFunctionFilters(cfg, {
-        hogFunctionId: "hf_abc",
+      httpPosthogAdapter.reconcileDestination(creds, "hf", {
+        kind: "present",
+        webhookUrl: "https://x",
         eventNames: ["x"],
+        customerId: "c",
       })
     ).rejects.toBeInstanceOf(PosthogAuthError);
   });
 
-  it("4xx (non-401) throws PosthogClientError with status and body", async () => {
+  it("4xx (non-401) throws PosthogApiError with status and body", async () => {
     nextResponses.push({ status: 422, body: { detail: "bad" } });
     try {
-      await updateHogFunctionFilters(cfg, {
-        hogFunctionId: "hf_abc",
+      await httpPosthogAdapter.reconcileDestination(creds, "hf", {
+        kind: "present",
+        webhookUrl: "https://x",
         eventNames: ["x"],
+        customerId: "c",
       });
       throw new Error("should have thrown");
     } catch (err) {
-      expect(err).toBeInstanceOf(PosthogClientError);
-      const e = err as PosthogClientError;
+      expect(err).toBeInstanceOf(PosthogApiError);
+      const e = err as PosthogApiError;
       expect(e.status).toBe(422);
       expect(e.body).toEqual({ detail: "bad" });
     }
@@ -220,9 +247,11 @@ describe("error mapping", () => {
   it("5xx throws PosthogTransientError", async () => {
     nextResponses.push({ status: 503, body: { detail: "unavailable" } });
     try {
-      await updateHogFunctionFilters(cfg, {
-        hogFunctionId: "hf_abc",
+      await httpPosthogAdapter.reconcileDestination(creds, "hf", {
+        kind: "present",
+        webhookUrl: "https://x",
         eventNames: ["x"],
+        customerId: "c",
       });
       throw new Error("should have thrown");
     } catch (err) {
@@ -234,10 +263,7 @@ describe("error mapping", () => {
   it("network error throws PosthogTransientError with null status", async () => {
     throwOnFetch = new TypeError("fetch failed");
     try {
-      await updateHogFunctionFilters(cfg, {
-        hogFunctionId: "hf_abc",
-        eventNames: ["x"],
-      });
+      await httpPosthogAdapter.verifyCredentials(creds);
       throw new Error("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(PosthogTransientError);

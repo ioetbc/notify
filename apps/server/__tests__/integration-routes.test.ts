@@ -2,40 +2,26 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, mock } from "bun
 import type { PGlite } from "@electric-sql/pglite";
 import { createTestDb, resetTestDb, type TestDb } from "../test/db";
 import { customer, customerIntegration, customerEventDefinition } from "../db/schema";
+import {
+  createInMemoryPosthogAdapter,
+  type InMemoryPosthogAdapter,
+} from "../services/posthog/in-memory-adapter";
 
-// ── PostHog client stubs (Chunk A surface) ───────────────────────────────
-class PosthogAuthError extends Error {
-  constructor() {
-    super("posthog_auth_failed");
-    this.name = "PosthogAuthError";
-  }
-}
-
-class PosthogTransientError extends Error {
-  constructor() {
-    super("posthog_transient");
-    this.name = "PosthogTransientError";
-  }
-}
-
-const mockCreateHogFunction = mock<any>();
-const mockListRecentEvents = mock<any>();
-const mockUpdateHogFunctionFilters = mock<any>();
-const mockDeleteHogFunction = mock<any>();
+// Construct the in-memory PostHog adapter and route the production export
+// through it. Routes only know about httpPosthogAdapter; we replace it.
+let posthogAdapter: InMemoryPosthogAdapter = createInMemoryPosthogAdapter();
 
 mock.module("../services/posthog", () => ({
-  createHogFunction: mockCreateHogFunction,
-  listRecentEvents: mockListRecentEvents,
-  updateHogFunctionFilters: mockUpdateHogFunctionFilters,
-  deleteHogFunction: mockDeleteHogFunction,
-  PosthogAuthError,
-  PosthogTransientError,
+  httpPosthogAdapter: new Proxy({} as InMemoryPosthogAdapter, {
+    get: (_t, key) => (posthogAdapter as any)[key],
+  }),
+  // Re-export the rest of the module surface used elsewhere (none in routes).
+  HOG_DESTINATION_SOURCE: "",
+  HOG_INPUTS_SCHEMA: [],
 }));
 
-// ── DB module mock pointing at a PGlite test DB ──────────────────────────
-// Construct the test DB synchronously before registering the mock so that
-// the static `import { db } from "../db"` in the route module resolves to
-// the live PGlite handle rather than a still-undefined binding.
+// Construct the test DB before registering its mock so `import { db } from "../db"`
+// resolves to the live PGlite handle.
 const { db: testDb, client: pgClient } = (await createTestDb()) as {
   db: TestDb;
   client: PGlite;
@@ -43,8 +29,6 @@ const { db: testDb, client: pgClient } = (await createTestDb()) as {
 
 mock.module("../db", () => ({ db: testDb }));
 
-// Imports must come AFTER the module mocks so that the route file resolves
-// the mocked versions.
 const { integrationApp } = await import("../functions/public/integration");
 
 const CUSTOMER_ID = "00000000-0000-0000-0000-000000000aaa";
@@ -68,10 +52,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetTestDb(pgClient);
-  mockCreateHogFunction.mockReset();
-  mockListRecentEvents.mockReset();
-  mockUpdateHogFunctionFilters.mockReset();
-  mockDeleteHogFunction.mockReset();
+  posthogAdapter = createInMemoryPosthogAdapter();
 });
 
 function request(
@@ -120,7 +101,21 @@ describe("POST /api/integrations/posthog/connect", () => {
     expect(rows[0].config.hog_function_id).toBeNull();
     expect(rows[0].config.project_id).toBe("42");
 
-    expect(mockCreateHogFunction).not.toHaveBeenCalled();
+    expect(posthogAdapter.getHogFunction("42")).toBeNull();
+  });
+
+  it("returns 502 when PostHog rejects the credentials", async () => {
+    await seedCustomer();
+    posthogAdapter.setSimulate("auth");
+
+    const res = await request("/api/integrations/posthog/connect", {
+      method: "POST",
+      body: JSON.stringify({ personal_api_key: "bad", project_id: "1" }),
+    });
+
+    expect(res.status).toBe(502);
+    const rows = await testDb.select().from(customerIntegration);
+    expect(rows).toHaveLength(0);
   });
 
   it("returns 409 when an integration already exists", async () => {
@@ -137,67 +132,31 @@ describe("POST /api/integrations/posthog/connect", () => {
     });
     expect(second.status).toBe(409);
   });
-
-  it("does not call PostHog during connect", async () => {
-    await seedCustomer();
-    mockCreateHogFunction.mockRejectedValue(new PosthogAuthError());
-
-    const res = await request("/api/integrations/posthog/connect", {
-      method: "POST",
-      body: JSON.stringify({ personal_api_key: "bad", project_id: "1" }),
-    });
-
-    expect(res.status).toBe(201);
-    const rows = await testDb.select().from(customerIntegration);
-    expect(rows).toHaveLength(1);
-    expect(mockCreateHogFunction).not.toHaveBeenCalled();
-  });
-
-  it("does not surface transient PostHog errors during connect", async () => {
-    await seedCustomer();
-    mockCreateHogFunction.mockRejectedValue(new PosthogTransientError());
-
-    const res = await request("/api/integrations/posthog/connect", {
-      method: "POST",
-      body: JSON.stringify({ personal_api_key: "k", project_id: "1" }),
-    });
-
-    expect(res.status).toBe(201);
-    expect(res.headers.get("retry-after")).toBeNull();
-  });
 });
 
 describe("GET /api/integrations/posthog/events", () => {
-  it("returns the list from the PostHog client", async () => {
+  it("returns the merged event list", async () => {
     await seedCustomer();
-
     await request("/api/integrations/posthog/connect", {
       method: "POST",
       body: JSON.stringify({ personal_api_key: "k", project_id: "1" }),
     });
 
-    mockListRecentEvents.mockResolvedValue([
+    posthogAdapter.setEvents("1", [
       { name: "purchase", volume: 9 },
       { name: "signup", volume: 4 },
     ]);
 
     const res = await request("/api/integrations/posthog/events?days=14&limit=20");
-  
+
     expect(res.status).toBe(200);
-    
     expect(await res.json()).toEqual([
       { name: "purchase", volume: 9, active: false },
       { name: "signup", volume: 4, active: false },
     ]);
 
-    const definitions = await testDb
-      .select()
-      .from(customerEventDefinition);
+    const definitions = await testDb.select().from(customerEventDefinition);
     expect(definitions).toHaveLength(0);
-
-    const [, args] = mockListRecentEvents.mock.calls[0];
-
-    expect(args).toEqual({ days: 14, limit: 20, excludePrefixed: true });
   });
 
   it("returns 404 when no integration exists", async () => {
@@ -210,7 +169,6 @@ describe("GET /api/integrations/posthog/events", () => {
 describe("POST /api/integrations/posthog/events/selection", () => {
   it("stores selected events and provisions the hog function", async () => {
     await seedCustomer();
-    mockCreateHogFunction.mockResolvedValue({ hogFunctionId: "hf-1" });
     await request("/api/integrations/posthog/connect", {
       method: "POST",
       body: JSON.stringify({ personal_api_key: "k", project_id: "1" }),
@@ -230,26 +188,26 @@ describe("POST /api/integrations/posthog/events/selection", () => {
     expect(await res.json()).toEqual({ event_names: ["purchase", "signup"] });
 
     const integrations = await testDb.select().from(customerIntegration);
-    expect(integrations[0].config.hog_function_id).toBe("hf-1");
-    expect(mockCreateHogFunction).toHaveBeenCalledTimes(1);
-    const [, hogArgs] = mockCreateHogFunction.mock.calls[0] as [any, any];
-    expect(hogArgs.eventNames).toEqual(["purchase", "signup"]);
+    const fn = posthogAdapter.getHogFunction("1");
+    expect(fn).not.toBeNull();
+    expect(fn!.eventNames).toEqual(["purchase", "signup"]);
+    expect(integrations[0].config.hog_function_id).toBe(fn!.id);
 
     const definitions = await testDb.select().from(customerEventDefinition);
-    expect(definitions.map((row) => ({
-      eventName: row.eventName,
-      volume: row.volume,
-      active: row.active,
-    }))).toEqual([
+    expect(
+      definitions.map((row) => ({
+        eventName: row.eventName,
+        volume: row.volume,
+        active: row.active,
+      }))
+    ).toEqual([
       { eventName: "purchase", volume: 9, active: true },
       { eventName: "signup", volume: 4, active: true },
     ]);
   });
 
-  it("marks deselected events inactive and updates the hog function filters", async () => {
+  it("marks deselected events inactive and patches filters", async () => {
     await seedCustomer();
-    mockCreateHogFunction.mockResolvedValue({ hogFunctionId: "hf-1" });
-    mockUpdateHogFunctionFilters.mockResolvedValue(undefined);
     await request("/api/integrations/posthog/connect", {
       method: "POST",
       body: JSON.stringify({ personal_api_key: "k", project_id: "1" }),
@@ -263,6 +221,7 @@ describe("POST /api/integrations/posthog/events/selection", () => {
         ],
       }),
     });
+    const firstFnId = posthogAdapter.getHogFunction("1")!.id;
 
     const res = await request("/api/integrations/posthog/events/selection", {
       method: "POST",
@@ -270,15 +229,16 @@ describe("POST /api/integrations/posthog/events/selection", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(mockUpdateHogFunctionFilters).toHaveBeenCalledWith(
-      expect.anything(),
-      { hogFunctionId: "hf-1", eventNames: ["purchase"] }
-    );
+    const fn = posthogAdapter.getHogFunction("1")!;
+    expect(fn.id).toBe(firstFnId);
+    expect(fn.eventNames).toEqual(["purchase"]);
+
     const definitions = await testDb.select().from(customerEventDefinition);
-    expect(definitions.map((row) => ({
-      eventName: row.eventName,
-      active: row.active,
-    })).sort((a, b) => a.eventName.localeCompare(b.eventName))).toEqual([
+    expect(
+      definitions
+        .map((row) => ({ eventName: row.eventName, active: row.active }))
+        .sort((a, b) => a.eventName.localeCompare(b.eventName))
+    ).toEqual([
       { eventName: "purchase", active: true },
       { eventName: "signup", active: false },
     ]);
@@ -292,13 +252,28 @@ describe("POST /api/integrations/posthog/events/selection", () => {
     });
     expect(res.status).toBe(404);
   });
+
+  it("returns 503 with Retry-After during a transient PostHog outage", async () => {
+    await seedCustomer();
+    await request("/api/integrations/posthog/connect", {
+      method: "POST",
+      body: JSON.stringify({ personal_api_key: "k", project_id: "1" }),
+    });
+    posthogAdapter.setSimulate("transient");
+
+    const res = await request("/api/integrations/posthog/events/selection", {
+      method: "POST",
+      body: JSON.stringify({ events: [{ name: "purchase", volume: 9 }] }),
+    });
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("30");
+  });
 });
 
 describe("DELETE /api/integrations/posthog", () => {
   it("removes the remote hog function, removes the row, and returns 204", async () => {
     await seedCustomer();
-    mockCreateHogFunction.mockResolvedValue({ hogFunctionId: "hf-1" });
-    mockDeleteHogFunction.mockResolvedValue(undefined);
     await request("/api/integrations/posthog/connect", {
       method: "POST",
       body: JSON.stringify({ personal_api_key: "k", project_id: "1" }),
@@ -307,17 +282,14 @@ describe("DELETE /api/integrations/posthog", () => {
       method: "POST",
       body: JSON.stringify({ events: [{ name: "purchase", volume: 9 }] }),
     });
-    mockDeleteHogFunction.mockClear();
+    expect(posthogAdapter.getHogFunction("1")).not.toBeNull();
 
     const res = await request("/api/integrations/posthog", { method: "DELETE" });
     expect(res.status).toBe(204);
 
     const rows = await testDb.select().from(customerIntegration);
     expect(rows).toHaveLength(0);
-    expect(mockDeleteHogFunction).toHaveBeenCalledWith(
-      expect.anything(),
-      { hogFunctionId: "hf-1" }
-    );
+    expect(posthogAdapter.getHogFunction("1")).toBeNull();
   });
 
   it("returns 404 when no integration exists", async () => {

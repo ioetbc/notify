@@ -5,15 +5,12 @@ import { match } from "ts-pattern";
 import { db } from "../../db";
 import * as integrationRepo from "../../repository/integration";
 import { createEventDefinitionRepo } from "../../repository/event-definition";
-import * as posthog from "../../services/posthog";
+import { httpPosthogAdapter } from "../../services/posthog";
 import {
-  connect,
-  listEvents,
-  saveEventSelection,
-  disconnect,
-  getSummary,
-  IntegrationAlreadyExistsError,
+  makePosthogIntegration,
+  PosthogIntegrationError,
   type IntegrationDeps,
+  type PosthogIntegrationPort,
 } from "../../services/integration";
 
 const connectBodySchema = z.object({
@@ -42,69 +39,53 @@ const eventSelectionBodySchema = z.object({
 
 const eventDefinitions = createEventDefinitionRepo(db);
 
-function makeDeps(): IntegrationDeps {
-  return {
+function makeIntegration(): PosthogIntegrationPort {
+  const deps: IntegrationDeps = {
     db,
     repo: integrationRepo,
     eventDefinitions,
-    posthog: posthog as unknown as IntegrationDeps["posthog"],
+    posthog: httpPosthogAdapter,
     webhookBaseUrl: process.env.WEBHOOK_BASE_URL ?? "",
   };
-}
-
-type MappedPosthogError = {
-  status: 502 | 503;
-  body: { code: string };
-  retryAfter?: string;
-};
-
-function mapPosthogError(err: unknown): MappedPosthogError | null {
-  return match(err)
-    .returnType<MappedPosthogError | null>()
-    .when(
-      (e) => e instanceof posthog.PosthogAuthError,
-      () => ({ status: 502, body: { code: "posthog_auth_failed" } })
-    )
-    .when(
-      (e) => e instanceof posthog.PosthogTransientError,
-      () => ({
-        status: 503,
-        body: { code: "posthog_unavailable" },
-        retryAfter: "30",
-      })
-    )
-    .otherwise(() => null);
+  return makePosthogIntegration(deps);
 }
 
 function getCustomerId(c: Context): string {
   return c.req.header("x-customer-id")!;
 }
 
-function integrationNotFound(c: Context) {
-  return c.json({ error: { code: "integration_not_found" } }, 404);
-}
-
-function respondWithMappedError(c: Context, err: unknown) {
-  if (err instanceof IntegrationAlreadyExistsError) {
-    return c.json({ error: { code: "integration_already_exists" } }, 409);
-  }
-
-  const mapped = mapPosthogError(err);
-  if (!mapped) return null;
-
-  if (mapped.retryAfter) c.header("Retry-After", mapped.retryAfter);
-  return c.json(mapped.body, mapped.status);
-}
-
-async function handleIntegrationAction(
+async function reply<T>(
   c: Context,
-  action: () => Promise<Response>
+  action: () => Promise<T>,
+  successStatus: 200 | 201 | 204
 ): Promise<Response> {
   try {
-    return await action();
+    const result = await action();
+    if (successStatus === 204) return c.body(null, 204);
+    return c.json(result as object, successStatus);
   } catch (err) {
-    const response = respondWithMappedError(c, err);
-    if (response) return response;
+    if (err instanceof PosthogIntegrationError) {
+      return match(err.detail)
+        .with({ kind: "auth_failed" }, () =>
+          c.json({ error: { code: "posthog_auth_failed" } }, 502)
+        )
+        .with({ kind: "transient" }, (d) => {
+          if (d.retryAfterSec !== null) {
+            c.header("Retry-After", String(d.retryAfterSec));
+          }
+          return c.json({ error: { code: "posthog_unavailable" } }, 503);
+        })
+        .with({ kind: "already_exists" }, () =>
+          c.json({ error: { code: "integration_already_exists" } }, 409)
+        )
+        .with({ kind: "not_found" }, () =>
+          c.json({ error: { code: "integration_not_found" } }, 404)
+        )
+        .with({ kind: "upstream" }, () =>
+          c.json({ error: { code: "posthog_upstream_error" } }, 502)
+        )
+        .exhaustive() as Response;
+    }
     throw err;
   }
 }
@@ -118,70 +99,74 @@ export const integrationApp = new Hono()
     await next();
   })
   .get("/api/integrations/posthog", async (c) => {
-    const customerId = getCustomerId(c);
-    const summary = await getSummary(makeDeps(), { customerId });
-    if (!summary) return integrationNotFound(c);
+    const summary = await makeIntegration().getSummary({
+      customerId: getCustomerId(c),
+    });
+    if (!summary) return c.json({ error: { code: "integration_not_found" } }, 404);
     return c.json(summary, 200);
   })
   .post(
     "/api/integrations/posthog/connect",
     zValidator("json", connectBodySchema),
-    async (c) => {
-      const customerId = getCustomerId(c);
+    (c) => {
       const { personal_api_key, project_id, region } = c.req.valid("json");
-
-      return handleIntegrationAction(c, async () => {
-        const result = await connect(makeDeps(), {
-          customerId,
-          personalApiKey: personal_api_key,
-          projectId: project_id,
-          region,
-        });
-        return c.json(result, 201);
-      });
+      return reply(
+        c,
+        () =>
+          makeIntegration().connect({
+            customerId: getCustomerId(c),
+            personalApiKey: personal_api_key,
+            projectId: project_id,
+            region,
+          }).then(({ integrationId }) => ({ integration_id: integrationId })),
+        201
+      );
     }
   )
   .get(
     "/api/integrations/posthog/events",
     zValidator("query", eventsQuerySchema),
-    async (c) => {
-      const customerId = getCustomerId(c);
+    (c) => {
       const { days, limit, include_autocaptured } = c.req.valid("query");
-
-      return handleIntegrationAction(c, async () => {
-        const events = await listEvents(makeDeps(), {
-          customerId,
-          days,
-          limit,
-          includeAutocaptured: include_autocaptured,
-        });
-        if (events === null) return integrationNotFound(c);
-        return c.json(events, 200);
-      });
+      return reply(
+        c,
+        () =>
+          makeIntegration().listEvents({
+            customerId: getCustomerId(c),
+            days,
+            limit,
+            includeAutocaptured: include_autocaptured,
+          }),
+        200
+      );
     }
   )
   .post(
     "/api/integrations/posthog/events/selection",
     zValidator("json", eventSelectionBodySchema),
-    async (c) => {
-      const customerId = getCustomerId(c);
+    (c) => {
       const { events } = c.req.valid("json");
-
-      return handleIntegrationAction(c, async () => {
-        const result = await saveEventSelection(makeDeps(), {
-          customerId,
-          events,
-        });
-        if (result === null) return integrationNotFound(c);
-        return c.json(result, 200);
-      });
+      return reply(
+        c,
+        () =>
+          makeIntegration()
+            .saveEvents({ customerId: getCustomerId(c), events })
+            .then(({ eventNames }) => ({ event_names: eventNames })),
+        200
+      );
     }
   )
-  .delete("/api/integrations/posthog", async (c) => {
-    const customerId = getCustomerId(c);
-    const ok = await disconnect(makeDeps(), { customerId });
-    if (!ok) return integrationNotFound(c);
-    return c.body(null, 204);
-  });
+  .delete("/api/integrations/posthog", (c) =>
+    reply(
+      c,
+      async () => {
+        const ok = await makeIntegration().disconnect({
+          customerId: getCustomerId(c),
+        });
+        if (!ok) throw new PosthogIntegrationError({ kind: "not_found" });
+      },
+      204
+    )
+  );
 
 export type IntegrationAppType = typeof integrationApp;
