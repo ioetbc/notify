@@ -4,7 +4,7 @@ import type {
   PosthogIntegrationConfig,
   PosthogRegion,
 } from "../../db";
-import * as eventDefinitionRepo from "../../repository/event-definition";
+import type { EventDefinitionRepo } from "../../repository/event-definition";
 import * as integrationRepo from "../../repository/integration";
 
 const POSTHOG_REGION_HOST: Record<PosthogRegion, string> = {
@@ -65,11 +65,7 @@ export type IntegrationDeps = {
     | "updateConfig"
     | "deleteIntegration"
   >;
-  eventDefinitions: Pick<
-    typeof eventDefinitionRepo,
-    | "listEventSelectionByIntegration"
-    | "setPosthogEventSelection"
-  >;
+  eventDefinitions: EventDefinitionRepo;
   posthog: PosthogClient;
   webhookBaseUrl: string;
 };
@@ -155,13 +151,12 @@ export async function listEvents(
     excludePrefixed: !input.includeAutocaptured,
   });
 
-  return mergeStoredEventSelection(
-    events,
-    await deps.eventDefinitions.listEventSelectionByIntegration(
-      deps.db,
-      context.row.id
-    )
-  );
+  const { rows } = await deps.eventDefinitions.run({
+    kind: "listForIntegration",
+    integrationId: context.row.id,
+  });
+
+  return mergeStoredEventSelection(events, rows);
 }
 
 export async function saveEventSelection(
@@ -177,9 +172,11 @@ export async function saveEventSelection(
   const selectedNames = uniqueEventNames(input.events);
   await syncHogFunctionFilters(deps, context, input.customerId, selectedNames);
 
-  await deps.eventDefinitions.setPosthogEventSelection(deps.db, {
+  await deps.eventDefinitions.run({
+    kind: "replaceSelection",
     customerId: input.customerId,
     integrationId: context.row.id,
+    provider: "posthog",
     events: input.events,
   });
 
@@ -271,7 +268,7 @@ function uniqueEventNames(events: Array<{ name: string }>): string[] {
 
 function mergeStoredEventSelection(
   events: Array<{ name: string; volume: number }>,
-  stored: Array<{ name: string; active: boolean; volume: number | null }>
+  stored: ReadonlyArray<{ name: string; active: boolean; volume: number | null }>
 ): Array<{ name: string; volume: number; active: boolean }> {
   const storedByName = new Map(stored.map((event) => [event.name, event]));
   const returnedNames = new Set(events.map((event) => event.name));

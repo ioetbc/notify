@@ -5,17 +5,20 @@ const mockFindUserByExternalId = mock<any>();
 const mockCreateUser = mock<any>();
 const mockUpdateUserAttributes = mock<any>();
 const mockCreateEvent = mock<any>();
-const mockUpsertSeenPosthogEvent = mock<any>();
+const mockEventDefinitionsRun = mock<any>();
 const mockFindActiveWorkflowsByTriggerEvent = mock<any>();
 const mockFindActiveWorkflowTriggers = mock<any>();
 const mockCreateWorkflowEnrollment = mock<any>();
+
+const trackPosthogEventDeps = {
+  eventDefinitions: { run: mockEventDefinitionsRun },
+};
 
 mock.module("../repository/public", () => ({
   findUserByExternalId: mockFindUserByExternalId,
   createUser: mockCreateUser,
   updateUserAttributes: mockUpdateUserAttributes,
   createEvent: mockCreateEvent,
-  upsertSeenPosthogEvent: mockUpsertSeenPosthogEvent,
   findActiveWorkflowsByTriggerEvent: mockFindActiveWorkflowsByTriggerEvent,
   findActiveWorkflowTriggers: mockFindActiveWorkflowTriggers,
   createWorkflowEnrollment: mockCreateWorkflowEnrollment,
@@ -26,7 +29,6 @@ mock.module("../repository/public/public", () => ({
   createUser: mockCreateUser,
   updateUserAttributes: mockUpdateUserAttributes,
   createEvent: mockCreateEvent,
-  upsertSeenPosthogEvent: mockUpsertSeenPosthogEvent,
   findActiveWorkflowsByTriggerEvent: mockFindActiveWorkflowsByTriggerEvent,
   findActiveWorkflowTriggers: mockFindActiveWorkflowTriggers,
   createWorkflowEnrollment: mockCreateWorkflowEnrollment,
@@ -114,7 +116,7 @@ beforeEach(() => {
   mockCreateUser.mockReset();
   mockUpdateUserAttributes.mockReset();
   mockCreateEvent.mockReset();
-  mockUpsertSeenPosthogEvent.mockReset();
+  mockEventDefinitionsRun.mockReset();
   mockFindActiveWorkflowsByTriggerEvent.mockReset();
   mockFindActiveWorkflowTriggers.mockReset();
   mockFindActiveWorkflowTriggers.mockResolvedValue([]);
@@ -288,7 +290,7 @@ describe("trackEvent", () => {
 
 describe("trackPosthogEvent", () => {
   it("stores and enrolls when distinct_id matches a Notify user externalId", async () => {
-    mockUpsertSeenPosthogEvent.mockResolvedValue({ id: "def-1" });
+    mockEventDefinitionsRun.mockResolvedValue({ kind: "recordSeen", id: "def-1", active: false });
     mockFindUserByExternalId.mockResolvedValue(fakeUser());
     mockCreateEvent.mockResolvedValue({
       id: "evt-1",
@@ -311,6 +313,7 @@ describe("trackPosthogEvent", () => {
     mockCreateWorkflowEnrollment.mockResolvedValue({ id: "enr-1" });
 
     const result = await trackPosthogEvent(
+      trackPosthogEventDeps,
       CUSTOMER_ID,
       "integration-1",
       "ext-1",
@@ -319,9 +322,11 @@ describe("trackPosthogEvent", () => {
       "2026-05-02T10:00:00.000Z"
     );
 
-    expect(mockUpsertSeenPosthogEvent).toHaveBeenCalledWith({
+    expect(mockEventDefinitionsRun).toHaveBeenCalledWith({
+      kind: "recordSeen",
       customerId: CUSTOMER_ID,
       integrationId: "integration-1",
+      provider: "posthog",
       eventName: "purchase_completed",
     });
     expect(mockCreateEvent).toHaveBeenCalledWith({
@@ -338,7 +343,7 @@ describe("trackPosthogEvent", () => {
   });
 
   it("stores unresolved PostHog events without enrolling", async () => {
-    mockUpsertSeenPosthogEvent.mockResolvedValue({ id: "def-1" });
+    mockEventDefinitionsRun.mockResolvedValue({ kind: "recordSeen", id: "def-1", active: false });
     mockFindUserByExternalId.mockResolvedValue(null);
     mockCreateEvent.mockResolvedValue({
       id: "evt-1",
@@ -347,6 +352,7 @@ describe("trackPosthogEvent", () => {
     });
 
     const result = await trackPosthogEvent(
+      trackPosthogEventDeps,
       CUSTOMER_ID,
       "integration-1",
       "unknown-ext",
@@ -369,7 +375,7 @@ describe("trackPosthogEvent", () => {
   });
 
   it("stores PostHog events even when they are not selected in the catalog", async () => {
-    mockUpsertSeenPosthogEvent.mockResolvedValue({ id: "def-1" });
+    mockEventDefinitionsRun.mockResolvedValue({ kind: "recordSeen", id: "def-1", active: false });
     mockFindUserByExternalId.mockResolvedValue(fakeUser());
     mockCreateEvent.mockResolvedValue({
       id: "evt-1",
@@ -379,15 +385,18 @@ describe("trackPosthogEvent", () => {
     mockFindActiveWorkflowsByTriggerEvent.mockResolvedValue([]);
 
     const result = await trackPosthogEvent(
+      trackPosthogEventDeps,
       CUSTOMER_ID,
       "integration-1",
       "ext-1",
       "paused_event"
     );
 
-    expect(mockUpsertSeenPosthogEvent).toHaveBeenCalledWith({
+    expect(mockEventDefinitionsRun).toHaveBeenCalledWith({
+      kind: "recordSeen",
       customerId: CUSTOMER_ID,
       integrationId: "integration-1",
+      provider: "posthog",
       eventName: "paused_event",
     });
     expect(mockCreateEvent).toHaveBeenCalledWith({

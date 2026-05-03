@@ -5,7 +5,9 @@ import { sql } from "drizzle-orm";
 import { workflows } from "./workflows";
 import { EnrollmentWalker } from "../../services/enrollment";
 import { sendPushNotification } from "../../services/enrollment/send";
-import { listActiveEventNames } from "../../repository/event-definition";
+import { createEventDefinitionRepo } from "../../repository/event-definition";
+
+const eventDefinitions = createEventDefinitionRepo(db);
 
 const walker = new EnrollmentWalker({
   db,
@@ -45,9 +47,12 @@ const routes = app
   .get("/event-names", async (c) => {
     const customerId = getCustomerId(c);
 
-    const eventNames = await listActiveEventNames(db, customerId);
+    const { names } = await eventDefinitions.run({
+      kind: "listActiveNames",
+      customerId,
+    });
 
-    return c.json({ event_names: eventNames }, 200);
+    return c.json({ event_names: names }, 200);
   })
   .post("/enrollments/process", async (c) => {
     const result = await walker.processReadyEnrollments();

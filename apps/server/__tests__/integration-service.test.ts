@@ -9,6 +9,75 @@ import {
   type PosthogClient,
 } from "../services/integration";
 import type { CustomerIntegration } from "../db/schema";
+import type {
+  EventDefinitionCommand,
+  EventDefinitionRepo,
+  EventDefinitionResult,
+} from "../repository/event-definition";
+
+type StoredRow = { name: string; active: boolean; volume: number | null };
+
+function createInMemoryEventDefinitionRepo(): EventDefinitionRepo & {
+  rows: Map<string, Map<string, StoredRow>>;
+} {
+  const rows = new Map<string, Map<string, StoredRow>>();
+  const forIntegration = (id: string) => {
+    let m = rows.get(id);
+    if (!m) {
+      m = new Map();
+      rows.set(id, m);
+    }
+    return m;
+  };
+
+  const run = async (cmd: EventDefinitionCommand): Promise<EventDefinitionResult> => {
+    if (cmd.kind === "recordSeen") {
+      const m = forIntegration(cmd.integrationId);
+      const existing = m.get(cmd.eventName);
+      if (existing) {
+        existing.volume = cmd.volume ?? existing.volume;
+        return { kind: "recordSeen", id: cmd.eventName, active: existing.active };
+      }
+      m.set(cmd.eventName, {
+        name: cmd.eventName,
+        active: false,
+        volume: cmd.volume ?? null,
+      });
+      return { kind: "recordSeen", id: cmd.eventName, active: false };
+    }
+    if (cmd.kind === "replaceSelection") {
+      const m = forIntegration(cmd.integrationId);
+      const selected = new Set(cmd.events.map((e) => e.name));
+      for (const [name, row] of m.entries()) {
+        if (!selected.has(name)) row.active = false;
+      }
+      for (const e of cmd.events) {
+        m.set(e.name, { name: e.name, active: true, volume: e.volume ?? null });
+      }
+      return { kind: "replaceSelection", activated: [...selected] };
+    }
+    if (cmd.kind === "listForIntegration") {
+      const m = forIntegration(cmd.integrationId);
+      return {
+        kind: "listForIntegration",
+        rows: [...m.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      };
+    }
+    if (cmd.kind === "listActiveNames") {
+      const out: string[] = [];
+      for (const m of rows.values()) {
+        for (const r of m.values()) if (r.active) out.push(r.name);
+      }
+      return { kind: "listActiveNames", names: out.sort() };
+    }
+    throw new Error(`unhandled: ${(cmd as { kind: string }).kind}`);
+  };
+
+  return {
+    run: run as EventDefinitionRepo["run"],
+    rows,
+  };
+}
 
 const CUSTOMER_ID = "cust-1";
 const INTEGRATION_ID = "integ-1";
@@ -21,12 +90,12 @@ const mockFindByCustomerAndProvider = mock<any>();
 const mockCreate = mock<any>();
 const mockUpdateConfig = mock<any>();
 const mockDeleteIntegration = mock<any>();
-const mockSetPosthogEventSelection = mock<any>();
-const mockListEventSelectionByIntegration = mock<any>();
 const mockCreateHogFunction = mock<any>();
 const mockUpdateHogFunctionFilters = mock<any>();
 const mockDeleteHogFunction = mock<any>();
 const mockListRecentEvents = mock<any>();
+
+let eventDefinitions: ReturnType<typeof createInMemoryEventDefinitionRepo>;
 
 function fakeRow(overrides?: Partial<CustomerIntegration>): CustomerIntegration {
   return {
@@ -59,10 +128,7 @@ function makeDeps(): IntegrationDeps {
       updateConfig: mockUpdateConfig,
       deleteIntegration: mockDeleteIntegration,
     },
-    eventDefinitions: {
-      setPosthogEventSelection: mockSetPosthogEventSelection,
-      listEventSelectionByIntegration: mockListEventSelectionByIntegration,
-    },
+    eventDefinitions,
     posthog: posthogClient,
     webhookBaseUrl: WEBHOOK_BASE,
   };
@@ -73,9 +139,7 @@ beforeEach(() => {
   mockCreate.mockReset();
   mockUpdateConfig.mockReset();
   mockDeleteIntegration.mockReset();
-  mockSetPosthogEventSelection.mockReset();
-  mockListEventSelectionByIntegration.mockReset();
-  mockListEventSelectionByIntegration.mockResolvedValue([]);
+  eventDefinitions = createInMemoryEventDefinitionRepo();
   mockCreateHogFunction.mockReset();
   mockUpdateHogFunctionFilters.mockReset();
   mockDeleteHogFunction.mockReset();
@@ -204,10 +268,21 @@ describe("disconnect", () => {
 describe("listEvents", () => {
   it("decodes the api key and forwards the call", async () => {
     mockFindByCustomerAndProvider.mockResolvedValue(fakeRow());
-    mockListEventSelectionByIntegration.mockResolvedValue([
-      { name: "purchase", volume: 10, active: true },
-      { name: "old_event", volume: 3, active: false },
-    ]);
+    await eventDefinitions.run({
+      kind: "replaceSelection",
+      customerId: CUSTOMER_ID,
+      integrationId: INTEGRATION_ID,
+      provider: "posthog",
+      events: [{ name: "purchase", volume: 10 }],
+    });
+    await eventDefinitions.run({
+      kind: "recordSeen",
+      customerId: CUSTOMER_ID,
+      integrationId: INTEGRATION_ID,
+      provider: "posthog",
+      eventName: "old_event",
+      volume: 3,
+    });
     mockListRecentEvents.mockResolvedValue([
       { name: "purchase", volume: 12 },
     ]);
@@ -266,7 +341,6 @@ describe("saveEventSelection", () => {
     mockFindByCustomerAndProvider.mockResolvedValue(fakeRow());
     mockCreateHogFunction.mockResolvedValue({ hogFunctionId: HOG_FUNCTION_ID });
     mockUpdateConfig.mockResolvedValue(fakeRow());
-    mockSetPosthogEventSelection.mockResolvedValue(undefined);
 
     const result = await saveEventSelection(makeDeps(), {
       customerId: CUSTOMER_ID,
@@ -284,11 +358,13 @@ describe("saveEventSelection", () => {
     expect(args.eventNames).toEqual(["purchase"]);
     expect(args.webhookUrl).toBe(`${WEBHOOK_BASE}/webhooks/posthog/${CUSTOMER_ID}`);
     expect(mockUpdateConfig.mock.calls[0][2].hog_function_id).toBe(HOG_FUNCTION_ID);
-    expect(mockSetPosthogEventSelection.mock.calls[0][1]).toEqual({
-      customerId: CUSTOMER_ID,
+    const stored = await eventDefinitions.run({
+      kind: "listForIntegration",
       integrationId: INTEGRATION_ID,
-      events: [{ name: "purchase", volume: 12 }],
     });
+    expect(stored.rows).toEqual([
+      { name: "purchase", active: true, volume: 12 },
+    ]);
   });
 
   it("updates filters and marks deselected events inactive when hog function exists", async () => {
@@ -303,7 +379,13 @@ describe("saveEventSelection", () => {
       })
     );
     mockUpdateHogFunctionFilters.mockResolvedValue(undefined);
-    mockSetPosthogEventSelection.mockResolvedValue(undefined);
+    await eventDefinitions.run({
+      kind: "replaceSelection",
+      customerId: CUSTOMER_ID,
+      integrationId: INTEGRATION_ID,
+      provider: "posthog",
+      events: [{ name: "purchase", volume: 1 }],
+    });
 
     const result = await saveEventSelection(makeDeps(), {
       customerId: CUSTOMER_ID,
@@ -320,11 +402,11 @@ describe("saveEventSelection", () => {
       },
       { hogFunctionId: HOG_FUNCTION_ID, eventNames: ["__notify_no_active_posthog_events__"] }
     );
-    expect(mockSetPosthogEventSelection.mock.calls[0][1]).toEqual({
-      customerId: CUSTOMER_ID,
+    const stored = await eventDefinitions.run({
+      kind: "listForIntegration",
       integrationId: INTEGRATION_ID,
-      events: [],
     });
+    expect(stored.rows.every((r) => r.active === false)).toBe(true);
   });
 
   it("returns null when no integration exists", async () => {
@@ -337,6 +419,6 @@ describe("saveEventSelection", () => {
 
     expect(result).toBeNull();
     expect(mockCreateHogFunction).not.toHaveBeenCalled();
-    expect(mockSetPosthogEventSelection).not.toHaveBeenCalled();
+    expect(eventDefinitions.rows.size).toBe(0);
   });
 });

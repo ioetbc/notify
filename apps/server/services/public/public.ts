@@ -1,6 +1,11 @@
 import * as repository from "../../repository/public";
 import * as workflowRepo from "../../repository/workflow";
+import type { EventDefinitionRepo } from "../../repository/event-definition";
 import type { Attributes } from "../../schemas/public";
+
+export type TrackPosthogEventDeps = {
+  eventDefinitions: EventDefinitionRepo;
+};
 
 function logPublicEvent(message: string, fields: Record<string, unknown> = {}) {
   console.log(JSON.stringify({ msg: message, ...fields }));
@@ -197,6 +202,7 @@ export async function trackEvent(
 }
 
 export async function trackPosthogEvent(
+  deps: TrackPosthogEventDeps,
   customerId: string,
   integrationId: string,
   externalId: string,
@@ -212,9 +218,11 @@ export async function trackPosthogEvent(
     timestamp,
   });
 
-  const definition = await repository.upsertSeenPosthogEvent({
+  const definition = await deps.eventDefinitions.run({
+    kind: "recordSeen",
     customerId,
     integrationId,
+    provider: "posthog",
     eventName,
   });
 

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { match } from "ts-pattern";
 import { db } from "../../db";
 import * as integrationRepo from "../../repository/integration";
-import * as eventDefinitionRepo from "../../repository/event-definition";
+import { createEventDefinitionRepo } from "../../repository/event-definition";
 import * as posthog from "../../services/posthog";
 import {
   connect,
@@ -40,11 +40,13 @@ const eventSelectionBodySchema = z.object({
   ),
 });
 
+const eventDefinitions = createEventDefinitionRepo(db);
+
 function makeDeps(): IntegrationDeps {
   return {
     db,
     repo: integrationRepo,
-    eventDefinitions: eventDefinitionRepo,
+    eventDefinitions,
     posthog: posthog as unknown as IntegrationDeps["posthog"],
     webhookBaseUrl: process.env.WEBHOOK_BASE_URL ?? "",
   };
