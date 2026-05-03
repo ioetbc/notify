@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { match } from 'ts-pattern';
 import { Button } from '../../components/ui/button';
 import type { EventSummary } from '../../lib/api/integrations';
@@ -15,9 +15,10 @@ type Status =
 export type EventPickerProps = {
   status: Status;
   includeAutocaptured: boolean;
+  saving: boolean;
   onToggleAutocaptured: (next: boolean) => void;
   onReconnect: () => void;
-  onCreateWorkflows: (selected: string[]) => void;
+  onSaveSelection: (selected: EventSummary[]) => void;
 };
 
 export function EventPicker(props: EventPickerProps) {
@@ -44,8 +45,9 @@ export function EventPicker(props: EventPickerProps) {
       <ReadyPicker
         events={events}
         includeAutocaptured={props.includeAutocaptured}
+        saving={props.saving}
         onToggleAutocaptured={props.onToggleAutocaptured}
-        onCreateWorkflows={props.onCreateWorkflows}
+        onSaveSelection={props.onSaveSelection}
       />
     ))
     .exhaustive();
@@ -54,16 +56,24 @@ export function EventPicker(props: EventPickerProps) {
 function ReadyPicker({
   events,
   includeAutocaptured,
+  saving,
   onToggleAutocaptured,
-  onCreateWorkflows,
+  onSaveSelection,
 }: {
   events: EventSummary[];
   includeAutocaptured: boolean;
+  saving: boolean;
   onToggleAutocaptured: (next: boolean) => void;
-  onCreateWorkflows: (selected: string[]) => void;
+  onSaveSelection: (selected: EventSummary[]) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(events.filter((event) => event.active).map((event) => event.name)),
+  );
+
+  useEffect(() => {
+    setSelected(new Set(events.filter((event) => event.active).map((event) => event.name)));
+  }, [events]);
 
   const sorted = useMemo(
     () => [...events].sort((a, b) => b.volume - a.volume),
@@ -87,16 +97,12 @@ function ReadyPicker({
     });
   };
 
-  const handleCreate = () => {
-    // TODO: replace with real workflow-creation endpoint once the backend
-    // exposes one. Tracked in the PostHog integration RFC ("Template picker
-    // UX"). For v1 we log the selection so the UI can ship independently.
-    const selectedNames = sorted
+  const selectedEvents = useMemo(
+    () => sorted
       .filter((e) => selected.has(e.name))
-      .map((e) => e.name);
-    console.log('[integrations] starter workflows requested for events:', selectedNames);
-    onCreateWorkflows(selectedNames);
-  };
+      .map((e) => ({ ...e, active: true })),
+    [selected, sorted],
+  );
 
   return (
     <div className="flex max-w-2xl flex-col gap-4">
@@ -153,8 +159,8 @@ function ReadyPicker({
       )}
 
       <div>
-        <Button onClick={handleCreate} disabled={selected.size === 0}>
-          Create {selected.size} starter workflow{selected.size === 1 ? '' : 's'}
+        <Button onClick={() => onSaveSelection(selectedEvents)} disabled={saving}>
+          {saving ? 'Saving…' : `Save ${selected.size} event${selected.size === 1 ? '' : 's'}`}
         </Button>
       </div>
     </div>

@@ -28,6 +28,7 @@ type PageState =
       events: EventsState;
       includeAutocaptured: boolean;
       disconnecting: boolean;
+      savingEvents: boolean;
     }
   | { kind: 'error'; message: string };
 
@@ -54,6 +55,7 @@ export function IntegrationsPage() {
             events: { kind: 'idle' },
             includeAutocaptured: false,
             disconnecting: false,
+            savingEvents: false,
           });
         } else {
           setState({ kind: 'disconnected', authError: false });
@@ -132,6 +134,7 @@ export function IntegrationsPage() {
           events: { kind: 'idle' },
           includeAutocaptured: false,
           disconnecting: false,
+          savingEvents: false,
         });
       })
       .catch((err: unknown) => {
@@ -184,8 +187,42 @@ export function IntegrationsPage() {
     );
   };
 
-  const handleCreateWorkflows = (_selected: string[]) => {
-    flashToast('Starter workflow creation is coming soon — selection logged to console.');
+  const handleSaveEventSelection = (selected: EventSummary[]) => {
+    if (state.kind !== 'connected') return;
+    setState({ ...state, savingEvents: true });
+    integrationsApi
+      .saveEventSelection(selected)
+      .then(() => {
+        setState((prev) => {
+          if (prev.kind !== 'connected') return prev;
+          const selectedNames = new Set(selected.map((event) => event.name));
+          return {
+            ...prev,
+            savingEvents: false,
+            events:
+              prev.events.kind === 'ready'
+                ? {
+                    kind: 'ready',
+                    events: prev.events.events.map((event) => ({
+                      ...event,
+                      active: selectedNames.has(event.name),
+                    })),
+                  }
+                : prev.events,
+          };
+        });
+        flashToast('PostHog event selection saved.');
+      })
+      .catch((err: unknown) => {
+        setState((prev) =>
+          prev.kind === 'connected' ? { ...prev, savingEvents: false } : prev,
+        );
+        if (err instanceof IntegrationApiError && err.detail.kind === 'posthog_auth_failed') {
+          flashToast('PostHog rejected the saved API key. Reconnect and try again.');
+          return;
+        }
+        flashToast("Couldn't save event selection. Try again.");
+      });
   };
 
   return (
@@ -220,13 +257,14 @@ export function IntegrationsPage() {
               onManageEvents={handleManageEvents}
             />
             <section className="flex flex-col gap-3">
-              <h2 className="text-sm font-semibold text-text-primary">Pick events for starter workflows</h2>
+              <h2 className="text-sm font-semibold text-text-primary">PostHog events</h2>
               <EventPicker
                 status={mapEventsStatus(s.events)}
                 includeAutocaptured={s.includeAutocaptured}
+                saving={s.savingEvents}
                 onToggleAutocaptured={handleToggleAutocaptured}
                 onReconnect={handleReconnect}
-                onCreateWorkflows={handleCreateWorkflows}
+                onSaveSelection={handleSaveEventSelection}
               />
             </section>
           </div>

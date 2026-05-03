@@ -20,6 +20,7 @@ export type IntegrationSummary = {
 export type EventSummary = {
   name: string;
   volume: number;
+  active: boolean;
 };
 
 export type ConnectInput = {
@@ -105,29 +106,30 @@ type MockState = {
     connected_at: string;
     personal_api_key: string;
   } | null;
+  selectedEvents: Set<string>;
 };
 
-const mock: MockState = { integration: null };
+const mock: MockState = { integration: null, selectedEvents: new Set() };
 
 const sampleEvents: ReadonlyArray<EventSummary> = [
-  { name: 'order_completed', volume: 4123 },
-  { name: 'checkout_started', volume: 3870 },
-  { name: 'product_viewed', volume: 3120 },
-  { name: 'signup_completed', volume: 1842 },
-  { name: 'trial_started', volume: 1320 },
-  { name: 'subscription_renewed', volume: 1108 },
-  { name: 'cart_abandoned', volume: 980 },
-  { name: 'support_ticket_opened', volume: 612 },
-  { name: 'feature_used_export', volume: 410 },
-  { name: 'feature_used_share', volume: 388 },
-  { name: 'invite_sent', volume: 221 },
-  { name: 'profile_updated', volume: 174 },
+  { name: 'order_completed', volume: 4123, active: false },
+  { name: 'checkout_started', volume: 3870, active: false },
+  { name: 'product_viewed', volume: 3120, active: false },
+  { name: 'signup_completed', volume: 1842, active: false },
+  { name: 'trial_started', volume: 1320, active: false },
+  { name: 'subscription_renewed', volume: 1108, active: false },
+  { name: 'cart_abandoned', volume: 980, active: false },
+  { name: 'support_ticket_opened', volume: 612, active: false },
+  { name: 'feature_used_export', volume: 410, active: false },
+  { name: 'feature_used_share', volume: 388, active: false },
+  { name: 'invite_sent', volume: 221, active: false },
+  { name: 'profile_updated', volume: 174, active: false },
 ];
 
 const autocapturedEvents: ReadonlyArray<EventSummary> = [
-  { name: '$pageview', volume: 21000 },
-  { name: '$autocapture', volume: 18420 },
-  { name: '$identify', volume: 6210 },
+  { name: '$pageview', volume: 21000, active: false },
+  { name: '$autocapture', volume: 18420, active: false },
+  { name: '$identify', volume: 6210, active: false },
 ];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -176,13 +178,24 @@ async function mockListEvents(opts: {
     ? [...sampleEvents, ...autocapturedEvents]
     : sampleEvents;
   return [...all]
+    .map((event) => ({ ...event, active: mock.selectedEvents.has(event.name) }))
     .sort((a, b) => b.volume - a.volume)
     .slice(0, opts.limit ?? 50);
+}
+
+async function mockSaveEventSelection(events: EventSummary[]): Promise<{ event_names: string[] }> {
+  await sleep(300);
+  if (!mock.integration) {
+    throw new IntegrationApiError({ kind: 'unknown', status: 404 });
+  }
+  mock.selectedEvents = new Set(events.map((event) => event.name));
+  return { event_names: [...mock.selectedEvents] };
 }
 
 async function mockDisconnect(): Promise<void> {
   await sleep(200);
   mock.integration = null;
+  mock.selectedEvents.clear();
 }
 
 // ---------- public API ----------
@@ -218,6 +231,19 @@ export const integrationsApi = {
     return request<EventSummary[]>(
       `/api/integrations/posthog/events${qs ? `?${qs}` : ''}`,
     );
+  },
+
+  saveEventSelection(events: EventSummary[]): Promise<{ event_names: string[] }> {
+    if (useMock) return mockSaveEventSelection(events);
+    return request<{ event_names: string[] }>('/api/integrations/posthog/events/selection', {
+      method: 'POST',
+      body: JSON.stringify({
+        events: events.map((event) => ({
+          name: event.name,
+          volume: event.volume,
+        })),
+      }),
+    });
   },
 
   disconnect(): Promise<void> {
