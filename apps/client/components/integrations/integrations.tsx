@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { match } from 'ts-pattern';
 import type { EventSummary } from '../../lib/api/integrations';
 import { ConnectForm } from './connect-form';
-import { EventPicker } from './event-picker';
+import { PostHogConnectionStateView } from './posthog-connection-state-view';
 import { ConnectedState } from './connected-state';
 import { usePosthogIntegration, type EventsState } from './use-posthog-integration';
 
@@ -51,7 +51,7 @@ export function IntegrationsPage() {
             />
             <section className="flex flex-col gap-3">
               <h2 className="text-sm font-semibold text-text-primary">PostHog events</h2>
-              <EventPicker
+              <PostHogConnectionStateView
                 status={mapEventsStatus(s.events)}
                 includeAutocaptured={s.includeAutocaptured}
                 saving={s.savingEvents}

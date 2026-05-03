@@ -12,7 +12,7 @@ type Status =
   | { kind: 'auth_failed' }
   | { kind: 'network_error' };
 
-export type EventPickerProps = {
+export type PostHogConnectionStateViewProps = {
   status: Status;
   includeAutocaptured: boolean;
   saving: boolean;
@@ -21,7 +21,7 @@ export type EventPickerProps = {
   onSaveSelection: (selected: EventSummary[]) => void;
 };
 
-export function EventPicker(props: EventPickerProps) {
+export function PostHogConnectionStateView(props: PostHogConnectionStateViewProps) {
   return match(props.status)
     .with({ kind: 'loading' }, () => (
       <p className="text-sm text-gray-500">Loading events from PostHog…</p>
