@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { match } from "ts-pattern";
@@ -74,148 +74,111 @@ function mapPosthogError(err: unknown): MappedPosthogError | null {
     .otherwise(() => null);
 }
 
+function getCustomerId(c: Context): string {
+  return c.req.header("x-customer-id")!;
+}
+
+function integrationNotFound(c: Context) {
+  return c.json({ error: { code: "integration_not_found" } }, 404);
+}
+
+function respondWithMappedError(c: Context, err: unknown) {
+  if (err instanceof IntegrationAlreadyExistsError) {
+    return c.json({ error: { code: "integration_already_exists" } }, 409);
+  }
+
+  const mapped = mapPosthogError(err);
+  if (!mapped) return null;
+
+  if (mapped.retryAfter) c.header("Retry-After", mapped.retryAfter);
+  return c.json(mapped.body, mapped.status);
+}
+
+async function handleIntegrationAction(
+  c: Context,
+  action: () => Promise<Response>
+): Promise<Response> {
+  try {
+    return await action();
+  } catch (err) {
+    const response = respondWithMappedError(c, err);
+    if (response) return response;
+    throw err;
+  }
+}
+
 export const integrationApp = new Hono()
   .use("/api/integrations/*", async (c, next) => {
     const customerId = c.req.header("x-customer-id");
     if (!customerId) {
       return c.json({ error: { code: "unauthorized" } }, 401);
     }
-    c.set("customerId" as never, customerId as never);
     await next();
   })
   .get("/api/integrations/posthog", async (c) => {
-    const customerId = c.req.header("x-customer-id")!;
+    const customerId = getCustomerId(c);
     const summary = await getSummary(makeDeps(), { customerId });
-    if (!summary) {
-      return c.json({ error: { code: "integration_not_found" } }, 404);
-    }
+    if (!summary) return integrationNotFound(c);
     return c.json(summary, 200);
   })
   .post(
     "/api/integrations/posthog/connect",
     zValidator("json", connectBodySchema),
     async (c) => {
-      const customerId = c.req.header("x-customer-id")!;
+      const customerId = getCustomerId(c);
       const { personal_api_key, project_id, region } = c.req.valid("json");
 
-      console.log("[POST /api/integrations/posthog/connect] received", {
-        customerId,
-        projectId: project_id,
-        region,
-        webhookBaseUrl: process.env.WEBHOOK_BASE_URL ?? "(unset)",
-      });
-
-      try {
+      return handleIntegrationAction(c, async () => {
         const result = await connect(makeDeps(), {
           customerId,
           personalApiKey: personal_api_key,
           projectId: project_id,
           region,
         });
-        console.log("[POST /api/integrations/posthog/connect] 201", {
-          customerId,
-          integrationId: result.integration_id,
-        });
         return c.json(result, 201);
-      } catch (err) {
-        if (err instanceof IntegrationAlreadyExistsError) {
-          console.warn(
-            "[POST /api/integrations/posthog/connect] 409 already exists",
-            { customerId }
-          );
-          return c.json(
-            { error: { code: "integration_already_exists" } },
-            409
-          );
-        }
-        const mapped = mapPosthogError(err);
-        if (mapped) {
-          console.error(
-            "[POST /api/integrations/posthog/connect] mapped posthog error",
-            {
-              customerId,
-              status: mapped.status,
-              code: mapped.body.code,
-              errorName: (err as Error)?.name,
-              errorMessage: (err as Error)?.message,
-            }
-          );
-          if (mapped.retryAfter) c.header("Retry-After", mapped.retryAfter);
-          return c.json(mapped.body, mapped.status);
-        }
-        console.error(
-          "[POST /api/integrations/posthog/connect] unmapped error",
-          {
-            customerId,
-            errorName: (err as Error)?.name,
-            errorMessage: (err as Error)?.message,
-            errorStack: (err as Error)?.stack,
-          }
-        );
-        throw err;
-      }
+      });
     }
   )
   .get(
     "/api/integrations/posthog/events",
     zValidator("query", eventsQuerySchema),
     async (c) => {
-      const customerId = c.req.header("x-customer-id")!;
+      const customerId = getCustomerId(c);
       const { days, limit, include_autocaptured } = c.req.valid("query");
 
-      try {
+      return handleIntegrationAction(c, async () => {
         const events = await listEvents(makeDeps(), {
           customerId,
           days,
           limit,
           includeAutocaptured: include_autocaptured,
         });
-        if (events === null) {
-          return c.json({ error: { code: "integration_not_found" } }, 404);
-        }
+        if (events === null) return integrationNotFound(c);
         return c.json(events, 200);
-      } catch (err) {
-        const mapped = mapPosthogError(err);
-        if (mapped) {
-          if (mapped.retryAfter) c.header("Retry-After", mapped.retryAfter);
-          return c.json(mapped.body, mapped.status);
-        }
-        throw err;
-      }
+      });
     }
   )
   .post(
     "/api/integrations/posthog/events/selection",
     zValidator("json", eventSelectionBodySchema),
     async (c) => {
-      const customerId = c.req.header("x-customer-id")!;
+      const customerId = getCustomerId(c);
       const { events } = c.req.valid("json");
 
-      try {
+      return handleIntegrationAction(c, async () => {
         const result = await saveEventSelection(makeDeps(), {
           customerId,
           events,
         });
-        if (result === null) {
-          return c.json({ error: { code: "integration_not_found" } }, 404);
-        }
+        if (result === null) return integrationNotFound(c);
         return c.json(result, 200);
-      } catch (err) {
-        const mapped = mapPosthogError(err);
-        if (mapped) {
-          if (mapped.retryAfter) c.header("Retry-After", mapped.retryAfter);
-          return c.json(mapped.body, mapped.status);
-        }
-        throw err;
-      }
+      });
     }
   )
   .delete("/api/integrations/posthog", async (c) => {
-    const customerId = c.req.header("x-customer-id")!;
+    const customerId = getCustomerId(c);
     const ok = await disconnect(makeDeps(), { customerId });
-    if (!ok) {
-      return c.json({ error: { code: "integration_not_found" } }, 404);
-    }
+    if (!ok) return integrationNotFound(c);
     return c.body(null, 204);
   });
 

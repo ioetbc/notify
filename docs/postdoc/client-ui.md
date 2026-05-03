@@ -1,6 +1,6 @@
 # Chunk D — Client UI
 
-The settings page where the customer pastes their PostHog key, picks events to template into starter workflows, and disconnects.
+The settings page where the customer pastes their PostHog key, chooses which PostHog events Notify should listen to, and disconnects.
 
 ## Depends on
 
@@ -11,11 +11,12 @@ The settings page where the customer pastes their PostHog key, picks events to t
 
 This repo's client lives at `apps/client/` (no `src/`). Adapted paths:
 
-- `apps/client/pages/integrations/integrations.tsx` — settings page
-- `apps/client/pages/integrations/connect-form.tsx`
-- `apps/client/pages/integrations/event-picker.tsx`
-- `apps/client/pages/integrations/connected-state.tsx`
-- `apps/client/pages/integrations/index.ts` — barrel
+- `apps/client/components/integrations/integrations.tsx` — settings page component
+- `apps/client/components/integrations/connect-form.tsx`
+- `apps/client/components/integrations/event-picker.tsx`
+- `apps/client/components/integrations/connected-state.tsx`
+- `apps/client/components/integrations/index.ts` — component barrel
+- `apps/client/pages/integrations/index.ts` — route barrel
 - `apps/client/lib/api/integrations.ts` — typed wrapper around the `/api/integrations/posthog/*` routes
 - Routing entry in `apps/client/App.tsx` and a navigation link from `apps/client/pages/home/home.tsx` — these are the "Integrations" entry-point edits.
 
@@ -53,7 +54,7 @@ Renders the result of `GET /events`. Each event row:
 
 Sort by volume descending. Top 10 are visible by default; the rest are behind a "Show more" expander. A "Show all events (including autocaptured)" toggle re-fetches with `?include_autocaptured=true`.
 
-A primary button at the bottom: **"Create N starter workflows"** (count updates with checkbox state). Clicking it should call a workflow-creation endpoint — **but this endpoint does not exist yet** and is out of scope for v1 backend chunks. For v1 client UI, render the button and wire it to a placeholder action that logs the selected events. Add a clearly-marked TODO and an issue reference. Do not block UI delivery on that backend work.
+A primary button at the bottom: **"Save N events"** (count updates with checkbox state). Clicking it calls `POST /api/integrations/posthog/events/selection`, persists the active event definitions, and reconciles the PostHog hog function filters.
 
 ### `ConnectedState`
 

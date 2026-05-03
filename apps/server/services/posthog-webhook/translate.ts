@@ -18,11 +18,15 @@ export type TranslatedEvent = {
   properties?: Record<string, unknown>;
   timestamp?: string;
   posthogEventUuid?: string;
+  originalExternalId?: string;
 };
+
+const POSTHOG_DEBUG_EXTERNAL_ID = "user_001";
 
 export function translate(payload: PosthogEventPayload): TranslatedEvent {
   return {
-    externalId: payload.distinct_id,
+    externalId: POSTHOG_DEBUG_EXTERNAL_ID,
+    originalExternalId: payload.distinct_id,
     event: payload.event,
     properties: payload.properties,
     timestamp: payload.timestamp,

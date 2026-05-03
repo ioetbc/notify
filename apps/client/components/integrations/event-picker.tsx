@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { match } from 'ts-pattern';
-import { Button } from '../../components/ui/button';
+import { Button } from '../ui/button';
 import type { EventSummary } from '../../lib/api/integrations';
 
 const TOP_VISIBLE = 10;
@@ -43,6 +43,7 @@ export function EventPicker(props: EventPickerProps) {
     ))
     .with({ kind: 'ready' }, ({ events }) => (
       <ReadyPicker
+        key={events.map((event) => `${event.name}:${event.active}`).join('|')}
         events={events}
         includeAutocaptured={props.includeAutocaptured}
         saving={props.saving}
@@ -71,19 +72,9 @@ function ReadyPicker({
     () => new Set(events.filter((event) => event.active).map((event) => event.name)),
   );
 
-  useEffect(() => {
-    setSelected(new Set(events.filter((event) => event.active).map((event) => event.name)));
-  }, [events]);
+  const sorted = useMemo(() => sortEventsByVolume(events), [events]);
 
-  const sorted = useMemo(
-    () => [...events].sort((a, b) => b.volume - a.volume),
-    [events],
-  );
-
-  const customCount = useMemo(
-    () => events.filter((e) => !e.name.startsWith('$')).length,
-    [events],
-  );
+  const customCount = useMemo(() => countCustomEvents(events), [events]);
 
   const visible = showAll ? sorted : sorted.slice(0, TOP_VISIBLE);
   const remainingCount = Math.max(0, sorted.length - TOP_VISIBLE);
@@ -97,19 +88,14 @@ function ReadyPicker({
     });
   };
 
-  const selectedEvents = useMemo(
-    () => sorted
-      .filter((e) => selected.has(e.name))
-      .map((e) => ({ ...e, active: true })),
-    [selected, sorted],
-  );
+  const selectedEvents = useMemo(() => getSelectedEvents(sorted, selected), [selected, sorted]);
 
   return (
     <div className="flex max-w-2xl flex-col gap-4">
       {customCount < MIN_CUSTOM_EVENTS && (
         <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
           We only see a handful of custom events in PostHog so far. Make sure you've sent events
-          (anything that isn't a default <code>$</code>-prefixed event) before picking templates.
+          (anything that isn't a default <code>$</code>-prefixed event) before saving a selection.
         </div>
       )}
 
@@ -165,4 +151,18 @@ function ReadyPicker({
       </div>
     </div>
   );
+}
+
+function sortEventsByVolume(events: EventSummary[]): EventSummary[] {
+  return [...events].sort((a, b) => b.volume - a.volume);
+}
+
+function countCustomEvents(events: EventSummary[]): number {
+  return events.filter((event) => !event.name.startsWith('$')).length;
+}
+
+function getSelectedEvents(events: EventSummary[], selected: Set<string>): EventSummary[] {
+  return events
+    .filter((event) => selected.has(event.name))
+    .map((event) => ({ ...event, active: true }));
 }

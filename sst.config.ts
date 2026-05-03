@@ -42,6 +42,9 @@ export default $config({
     const posthogWebhookApi = new sst.aws.Function('PosthogWebhookApi', {
       handler: 'apps/server/functions/posthog-webhook/index.handler',
       link: [db],
+      environment: {
+        POSTHOG_WEBHOOK_SKIP_SIGNATURE: 'true',
+      },
       url: {
         cors: {
           allowOrigins: ['*'],

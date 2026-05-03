@@ -41,12 +41,13 @@ Events-only integration. PostHog events trigger Notify journeys. Customer connec
 
 ## Connect flow
 
-The flow is split across two backend endpoints so the same wiring is shared by the dashboard and the `npx notify connect posthog` CLI (see `onboarding-cli.md`). One source of truth on the server, two UIs on top.
+The flow is split across backend endpoints so the same wiring is shared by the dashboard and the `npx notify connect posthog` CLI (see `onboarding-cli.md`). One source of truth on the server, two UIs on top.
 
 ### Endpoints
 
-- `POST /integrations/posthog/connect` — stores credentials and returns the event list. **No hog function side effect at this step.**
-- `POST /integrations/posthog/templates` — creates draft workflows and provisions the hog function with the filter list pre-populated.
+- `POST /integrations/posthog/connect` — stores credentials. **No hog function side effect at this step.**
+- `GET /integrations/posthog/events` — returns recent events plus current active selection.
+- `POST /integrations/posthog/events/selection` — persists selected events and provisions or updates the hog function filters.
 
 ### Steps
 
@@ -54,17 +55,16 @@ The flow is split across two backend endpoints so the same wiring is shared by t
 2. UI collects PostHog host (US or EU cloud — self-hosted is parked to v2), a PostHog **personal API key** with `hog_function:write` scope, and the PostHog project ID. Documented as: "create a service-account user in PostHog, generate a personal API key, paste it here."
 3. UI calls `POST /integrations/posthog/connect`. Notify:
    1. Stores the integration row (encrypted personal API key, project ID, host).
-   2. Fetches the customer's recent custom-event list via PostHog's `event_definitions` API (filtered to non-`$`-prefixed events, sorted by 30-day volume).
-   3. Returns the event list to the UI.
-4. UI presents the **template picker** — multi-select of returned events, with a "show all events" toggle for autocaptured (`$pageview` etc.) and the long tail.
-5. UI calls `POST /integrations/posthog/templates` with selected event names. Notify:
-   1. Generates a random 32-byte hex `webhook_secret`.
-   2. Creates draft workflows (one per selected event) with trigger nodes pre-wired.
-   3. Calls `POST /api/environments/:project_id/hog_functions/` to create a destination-type hog function. The function is templated to compute `HMAC-SHA256(webhook_secret, raw_body)` and POST every matching event to `https://api.notify.com/webhooks/posthog/:customerId` with header `X-Notify-Signature: <hmac>`. The webhook URL and secret are passed as `inputs` on the hog function. The filter list is pre-populated to the selected event names — the hog function is correct from the moment it exists.
-   4. Stores the returned `hog_function_id` and `webhook_secret_encrypted` on the integration row.
-6. As workflows are subsequently published, paused, archived, or have their trigger events changed, Notify reconciles the hog function's filter list.
+   2. Generates and stores a webhook secret for later hog function provisioning.
+4. UI fetches recent events and presents the **event picker** — multi-select of returned events, with a "show all events" toggle for autocaptured (`$pageview` etc.) and the long tail.
+5. UI calls `POST /integrations/posthog/events/selection` with selected event names. Notify:
+   1. Persists the selected event definitions.
+   2. Creates the destination-type hog function on the first non-empty selection. The function is templated to compute `HMAC-SHA256(webhook_secret, raw_body)` and POST every matching event to `https://api.notify.com/webhooks/posthog/:customerId` with header `X-Notify-Signature: <hmac>`.
+   3. Updates the hog function filters on subsequent saves. An empty selection uses a sentinel event filter rather than an empty filter list.
+   4. Stores the returned `hog_function_id` on the integration row.
+6. Starter workflow creation is deferred until template selection is implemented separately.
 
-Splitting `connect` from `templates` avoids creating a hog function with an empty filter list (which would forward everything) or creating one and immediately reconciling it (two API calls instead of one). Deferring provisioning until after the picker keeps the hog function correct on creation.
+Splitting `connect` from event selection avoids creating a hog function with an empty filter list, which could forward everything depending on PostHog's interpretation.
 
 The customer never sees, copies, or handles the webhook secret.
 
@@ -129,20 +129,20 @@ No changes to `event`, `user`, `workflow`, or any existing table in v1.
 - **PostHog hog function retry behavior:** PostHog retries failed deliveries automatically. Without idempotency (deferred to v1.5), a retried webhook can double-enroll a user. Acceptable risk for v1 because (a) the hog function only retries on 5xx from our endpoint, which should be rare, and (b) most workflows have a single-step welcome before any wait, so a duplicate is at worst a duplicate notification, not a runaway journey.
 - **Customer rotates their PostHog personal API key:** the hog function keeps delivering inbound events (auth is per-function), but our outbound reads start 401ing. v1 logs this; v1.5 adds detect-and-prompt-reconnect.
 
-## Template picker UX
+## Event Picker UX
 
 After connecting, the customer sees a list of their PostHog events with checkboxes:
 
 - Default view: custom events (no `$` prefix) seen in the last 30 days, sorted by volume, top 10 highlighted.
 - "Show all events" toggle reveals autocaptured events (`$pageview`, `$autocapture`, etc.) and the long tail.
-- Ticking an event creates a starter workflow with the trigger pre-set, status `draft`, ready for the customer to design in the canvas.
+- Ticking an event marks it active for Notify ingestion and reconciles the PostHog hog function filter list.
 
-This is the primary onboarding moment for the integration. It demonstrates immediate value: "you connected, here are six workflows pre-wired to the events you actually send."
+This is the primary onboarding moment for the integration. It demonstrates immediate value: "you connected, here are the events Notify can listen to from PostHog."
 
 ## Open questions
 
 - Encryption-at-rest implementation for the personal API key and webhook secret. Defer to implementation review.
-- Exact templates to ship in v1. Candidate set: welcome series, abandoned-checkout, churn-risk, re-engagement, trial-ending, milestone celebration. Final list deferred.
+- Starter workflow templates are deferred. Candidate set: welcome series, abandoned-checkout, churn-risk, re-engagement, trial-ending, milestone celebration.
 - Rate-limiting inbound webhooks. Probably unnecessary at our scale; revisit if we see bursts.
 
 ## Appendix — settled questions and rejected alternatives

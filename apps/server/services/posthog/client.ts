@@ -63,13 +63,6 @@ async function request(
   const parsed = PosthogClientConfigSchema.parse(cfg);
   const url = `${parsed.baseUrl.replace(/\/$/, "")}${init.path}`;
 
-  console.log("[posthog.request] outgoing", {
-    method: init.method,
-    url,
-    projectId: parsed.projectId,
-    hasBody: init.body !== undefined,
-  });
-
   let response: Response;
   try {
     response = await fetch(url, {
@@ -81,26 +74,11 @@ async function request(
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
     });
   } catch (cause) {
-    console.error("[posthog.request] network error", {
-      method: init.method,
-      url,
-      cause: (cause as Error)?.message,
-    });
     throw new PosthogTransientError(null, cause);
   }
 
   const text = await response.text();
   const body = text.length === 0 ? null : safeJson(text);
-
-  console.log("[posthog.request] response", {
-    method: init.method,
-    url,
-    status: response.status,
-    bodyPreview:
-      typeof body === "string"
-        ? body.slice(0, 500)
-        : JSON.stringify(body)?.slice(0, 500),
-  });
 
   return match(response.status)
     .with(P.number.gte(200).and(P.number.lt(300)), () => body)

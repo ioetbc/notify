@@ -66,27 +66,6 @@ export async function listEventSelectionByIntegration(
   return rows;
 }
 
-export async function findActivePosthogEventDefinition(
-  db: Db,
-  input: {
-    integrationId: string;
-    eventName: string;
-  }
-) {
-  const [row] = await db
-    .select()
-    .from(customerEventDefinition)
-    .where(
-      and(
-        eq(customerEventDefinition.integrationId, input.integrationId),
-        eq(customerEventDefinition.eventName, input.eventName),
-        eq(customerEventDefinition.active, true)
-      )
-    );
-
-  return row ?? null;
-}
-
 export async function upsertSeenPosthogEventDefinition(
   db: Db,
   input: {

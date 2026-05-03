@@ -63,7 +63,6 @@ Add a `customerRelations` entry for `integrations: many(customerIntegration)` an
 
 ```ts
 findByCustomerAndProvider(customerId: string, provider: "posthog"): Promise<CustomerIntegration | null>
-findById(id: string): Promise<CustomerIntegration | null>
 create(input: { customerId: string; provider: "posthog"; config: PosthogIntegrationConfig }): Promise<CustomerIntegration>
 updateConfig(id: string, config: PosthogIntegrationConfig): Promise<CustomerIntegration>
 deleteIntegration(id: string): Promise<void>   // `delete` is a reserved word, so the export is renamed

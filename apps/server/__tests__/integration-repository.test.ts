@@ -6,7 +6,6 @@ import { customer, customerIntegration } from "../db/schema";
 import type { PosthogIntegrationConfig } from "../db/schema";
 import {
   findByCustomerAndProvider,
-  findById,
   create,
   updateConfig,
   deleteIntegration,
@@ -54,9 +53,12 @@ describe("integration repository", () => {
     expect(created.config).toEqual(baseConfig);
     expect(created.connectedAt).toBeInstanceOf(Date);
 
-    const found = await findById(db, created.id);
+    const [found] = await db
+      .select()
+      .from(customerIntegration)
+      .where(eq(customerIntegration.id, created.id));
     expect(found).not.toBeNull();
-    expect(found!.id).toBe(created.id);
+    expect(found.id).toBe(created.id);
   });
 
   it("findByCustomerAndProvider returns null when no row exists", async () => {
@@ -119,8 +121,11 @@ describe("integration repository", () => {
     const updated = await updateConfig(db, created.id, next);
     expect(updated.config).toEqual(next);
 
-    const reread = await findById(db, created.id);
-    expect(reread!.config).toEqual(next);
+    const [reread] = await db
+      .select()
+      .from(customerIntegration)
+      .where(eq(customerIntegration.id, created.id));
+    expect(reread.config).toEqual(next);
   });
 
   it("deleteIntegration removes the row", async () => {
@@ -133,8 +138,11 @@ describe("integration repository", () => {
 
     await deleteIntegration(db, created.id);
 
-    const found = await findById(db, created.id);
-    expect(found).toBeNull();
+    const rows = await db
+      .select()
+      .from(customerIntegration)
+      .where(eq(customerIntegration.id, created.id));
+    expect(rows).toHaveLength(0);
   });
 
   it("cascades delete from customer to integration", async () => {

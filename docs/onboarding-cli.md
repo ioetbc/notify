@@ -8,7 +8,7 @@ Date: 2026-05-02
 
 Per `north-star.md`, integration today requires customer devs to wire up Expo push token registration, call `POST /users/register`, and fire events to `POST /events`. The PostHog integration (`rfc-posthog-integration.md`) collapses event firing into PostHog's existing instrumentation, but still leaves the customer to (a) connect their PostHog project from the dashboard and (b) hand-wire identity so `distinct_id` aligns with Notify's `user_id`.
 
-The CLI's job is to be a single guided command that handles the PostHog connection end-to-end: provisioning the hog function on the customer's behalf, picking trigger events from their actual PostHog event definitions, creating starter workflows, and printing the exact app-side snippets the developer needs to paste in.
+The CLI's job is to be a single guided command that handles the PostHog connection end-to-end: provisioning the hog function on the customer's behalf, picking trigger events from their actual PostHog event definitions, and printing the exact app-side snippets the developer needs to paste in.
 
 The CLI shares its backend endpoints with the dashboard's Settings → Integrations → PostHog flow. One source of truth on the server, two UIs (CLI + dashboard) on top.
 
@@ -40,11 +40,10 @@ The verb-noun shape leaves room for `connect mixpanel`, `connect segment`, etc. 
 5. **PostHog credentials** — paste personal API key (`hog_function:write` scope) and project ID. Documented as "create a service-account user in PostHog, generate a personal API key, paste it here," matching the RFC's connect-flow copy.
 6. **Connect** — CLI calls `POST /integrations/posthog/connect` on Notify backend with `{ notifyApiKey, posthogApiKey, posthogProjectId, posthogHost }`. Backend stores the encrypted integration row and fetches the customer's recent custom-event list (filtered to non-`$`-prefixed events, sorted by 30-day volume) via PostHog's `event_definitions` API. **No hog function is created at this step.**
 7. **Pick events** — CLI renders a multi-select checkbox prompt of the returned events, with a "show all events" toggle for autocaptured (`$pageview` etc.) and the long tail.
-8. **Provision** — CLI calls `POST /integrations/posthog/templates` with the selected event names. Backend:
-   1. Generates a random 32-byte hex `webhook_secret`.
-   2. Creates draft workflows (one per selected event), each with a trigger node pre-wired.
-   3. Provisions the hog function via `POST /api/environments/:project_id/hog_functions/` on PostHog, with the filter list pre-populated to the selected event names and the webhook secret passed as a hog function input.
-   4. Stores `hog_function_id` on the integration row.
+8. **Provision** — CLI calls `POST /integrations/posthog/events/selection` with the selected event names. Backend:
+   1. Persists the selected event definitions.
+   2. Provisions the hog function on the first non-empty selection, with the filter list pre-populated to the selected event names and the webhook secret passed as a hog function input.
+   3. Stores `hog_function_id` on the integration row.
 9. **Done screen** — prints:
    - The two app-side snippets the developer must paste in (see [Manual snippets](#manual-snippets) below).
    - The env vars to add (`EXPO_PUBLIC_NOTIFY_API_KEY`, plus any PostHog vars they don't already have).
@@ -56,10 +55,11 @@ The customer never sees, copies, or handles the webhook secret.
 
 The dashboard's existing connect flow is rewritten to call the same two endpoints. This is a change to `rfc-posthog-integration.md` — see the addendum at the bottom of that doc.
 
-- `POST /integrations/posthog/connect` — store credentials, return event list. **No hog function side effect.**
-- `POST /integrations/posthog/templates` — create draft workflows + provision hog function with filter list pre-populated.
+- `POST /integrations/posthog/connect` — store credentials. **No hog function side effect.**
+- `GET /integrations/posthog/events` — return recent events and active selection.
+- `POST /integrations/posthog/events/selection` — persist selection and provision/update hog function filters.
 
-The split exists because the hog function's job is to forward a *filtered* set of events; creating it before the customer has picked any events means it's either created with an empty filter (forwards everything — wrong) or created and immediately reconciled (two API calls instead of one). Deferring provisioning until after the picker keeps the hog function correct from the moment it exists.
+The split exists because the hog function's job is to forward a *filtered* set of events; creating it before the customer has picked any events means it could be created with an empty filter. Deferring provisioning until after the picker keeps the hog function correct from the moment it exists.
 
 ## Manual snippets
 

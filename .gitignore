@@ -197,3 +197,7 @@ dist
 
 # sst
 .sst
+
+# Local agent state/worktrees
+.claude/worktrees/
+.codex/

@@ -23,17 +23,6 @@ export async function findByCustomerAndProvider(
   return row ?? null;
 }
 
-export async function findById(
-  db: Db,
-  id: string
-): Promise<CustomerIntegration | null> {
-  const [row] = await db
-    .select()
-    .from(customerIntegration)
-    .where(eq(customerIntegration.id, id));
-  return row ?? null;
-}
-
 export async function create(
   db: Db,
   input: {

@@ -1,6 +1,6 @@
 # Chunk B — Connect Flow API
 
-The HTTP layer the customer's browser hits to connect their PostHog account, list their events for the template picker, and disconnect.
+The HTTP layer the customer's browser hits to connect their PostHog account, list/select events, reconcile PostHog filters, and disconnect.
 
 ## Depends on
 
@@ -32,7 +32,8 @@ All routes require an authenticated customer (use the existing auth middleware o
 |---|---|---|---|
 | `GET` | `/` | — | `{ id, provider, project_id, connected_at }` or `404` |
 | `POST` | `/connect` | `{ personal_api_key, project_id, region: "us" \| "eu" }` | `{ integration_id }` |
-| `GET` | `/events` | `?days=30&limit=50` | `Array<{ name, volume }>` |
+| `GET` | `/events` | `?days=30&limit=50&include_autocaptured=false` | `Array<{ name, volume, active }>` |
+| `POST` | `/events/selection` | `{ events: Array<{ name, volume? }> }` | `{ event_names }` |
 | `DELETE` | `/` | — | `204` |
 
 ### `GET /` flow
@@ -46,21 +47,25 @@ All routes require an authenticated customer (use the existing auth middleware o
 2. Reject if an integration already exists for this `(customer, posthog)` pair (return 409).
 3. Generate a 32-byte hex `webhook_secret` via `crypto.randomBytes`.
 4. Insert the integration row with `hog_function_id: null`, the encoded `personal_api_key` and `webhook_secret`, and the chosen `region` (Chunk 0 stores keys base64-encoded for now).
-5. Build the webhook URL: `https://<api-host>/webhooks/posthog/${customerId}` — the api-host comes from SST's resource binding.
-6. Call `posthog.createHogFunction()` with empty `eventNames: []` (workflows haven't been published yet — filter list reconciliation happens elsewhere when workflows publish).
-7. `repo.updateConfig()` to write the returned `hog_function_id`.
-8. Return `{ integration_id }`.
+5. Return `{ integration_id }`.
 
-If the PostHog call fails after the row is inserted, **delete the row** before propagating the error. Connect must be atomic from the customer's perspective.
+Connect deliberately does not create a hog function. The function is created on the first non-empty event selection so it never exists with an ambiguous empty filter.
 
 ### `GET /events`
 
 1. Look up the integration. 404 if missing.
 2. Decode the personal API key.
-3. Call `posthog.listRecentEvents({ days, limit, excludePrefixed: true })`.
-4. Return the array.
+3. Call `posthog.listRecentEvents({ days, limit, excludePrefixed: !include_autocaptured })`.
+4. Merge in stored event definitions so each returned event has `active`.
+5. Return the array.
 
-A second pass with `excludePrefixed: false` is the customer's "Show all events" toggle in Chunk D — handled by passing a query param. Add `?include_autocaptured=true` if you want to support it from this route directly. (Recommended: yes, makes Chunk D's UI a one-line change.)
+### `POST /events/selection`
+
+1. Look up the integration. 404 if missing.
+2. Persist the selected event names in `customer_event_definition`, marking previously selected events inactive when omitted.
+3. If this is the first non-empty selection, create the hog function with those event names.
+4. If the hog function already exists, update its filters. When the selection is empty, use a sentinel event name rather than an empty filter list so PostHog cannot interpret the filter as "forward everything."
+5. Return `{ event_names }`.
 
 ### `DELETE /`
 
@@ -79,9 +84,10 @@ A second pass with `excludePrefixed: false` is the customer's "Show all events" 
 
 Service-level (mock the repo and the client):
 
-- Connect inserts a row, calls the client, writes back the hog function id.
-- Connect rolls back the row when the client throws.
+- Connect inserts a row without creating a hog function.
 - Connect rejects when an integration already exists.
+- Event selection creates the hog function on first non-empty selection.
+- Event selection updates filters and marks omitted events inactive when the hog function exists.
 - Disconnect deletes the row but does not call the client.
 
 Route-level (in-process Hono, real DB, stubbed PostHog client):

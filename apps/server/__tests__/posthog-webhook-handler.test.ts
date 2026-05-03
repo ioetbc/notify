@@ -38,7 +38,7 @@ const mockTrackEvent = mock(async (...args: unknown[]) => {
 });
 
 function buildApp() {
-  return createWebhookApp({ db, trackEvent: mockTrackEvent as any });
+  return createWebhookApp({ db, trackPosthogEvent: mockTrackEvent as any });
 }
 
 async function seedCustomer(id = CUSTOMER_ID) {
@@ -94,6 +94,7 @@ beforeEach(async () => {
   await resetTestDb(client);
   trackEventCalls = [];
   trackEventReturn = { id: "evt-1" };
+  delete process.env.POSTHOG_WEBHOOK_SKIP_SIGNATURE;
 });
 
 describe("posthog webhook handler", () => {
@@ -117,7 +118,7 @@ describe("posthog webhook handler", () => {
     expect(trackEventCalls[0]).toEqual([
       CUSTOMER_ID,
       integrationId,
-      "user-ext-1",
+      "user_001",
       "purchase_completed",
       { amount: 42 },
       "2026-05-02T10:00:00.000Z",
@@ -147,6 +148,19 @@ describe("posthog webhook handler", () => {
 
     expect(res.status).toBe(401);
     expect(trackEventCalls).toHaveLength(0);
+  });
+
+  it("can skip signature verification with an explicit debug env var", async () => {
+    process.env.POSTHOG_WEBHOOK_SKIP_SIGNATURE = "true";
+    await seedCustomer();
+    await seedIntegration();
+
+    const body = JSON.stringify({ event: "x", distinct_id: "u" });
+    const res = await buildApp().fetch(makeRequest({ body, signature: "bad" }));
+
+    expect(res.status).toBe(202);
+    expect(trackEventCalls).toHaveLength(1);
+    expect((trackEventCalls[0] as any[])[2]).toBe("user_001");
   });
 
   it("returns 401 when signature header is missing", async () => {

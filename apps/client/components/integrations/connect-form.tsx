@@ -1,10 +1,9 @@
 import { useState, type FormEvent } from 'react';
-import { Button } from '../../components/ui/button';
-import { Input } from '../../components/ui/input';
-import { Label } from '../../components/ui/label';
+import { Button } from '../ui/button';
+import { Input } from '../ui/input';
+import { Label } from '../ui/label';
 
-// TODO(v1.5): replace with the real "create a PostHog personal API key" doc URL.
-const HELP_URL = '#how-to-create-a-posthog-personal-api-key';
+const HELP_URL = 'https://us.posthog.com/settings/user-api-keys';
 
 export type ConnectFormProps = {
   submitting: boolean;
@@ -16,19 +15,9 @@ export type ConnectFormProps = {
   }) => void;
 };
 
-// Dev-only convenience defaults so we don't have to paste these every reload.
-// Read from env (VITE_DEV_POSTHOG_API_KEY / VITE_DEV_POSTHOG_PROJECT_ID) so secrets
-// never get committed. Gated on `import.meta.env.DEV` so prod builds ship empty.
-const DEV_DEFAULT_API_KEY = import.meta.env.DEV
-  ? (import.meta.env.VITE_DEV_POSTHOG_API_KEY ?? '')
-  : '';
-const DEV_DEFAULT_PROJECT_ID = import.meta.env.DEV
-  ? (import.meta.env.VITE_DEV_POSTHOG_PROJECT_ID ?? '')
-  : '';
-
 export function ConnectForm({ submitting, authError, onSubmit }: ConnectFormProps) {
-  const [apiKey, setApiKey] = useState(DEV_DEFAULT_API_KEY);
-  const [projectId, setProjectId] = useState(DEV_DEFAULT_PROJECT_ID);
+  const [apiKey, setApiKey] = useState('');
+  const [projectId, setProjectId] = useState('');
   const [region, setRegion] = useState<'us' | 'eu'>('eu');
 
   const handleSubmit = (e: FormEvent) => {
@@ -42,7 +31,7 @@ export function ConnectForm({ submitting, authError, onSubmit }: ConnectFormProp
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="posthog-api-key">PostHog personal API key</Label>
         <p className="text-xs text-gray-500">
-          The key needs the <code className="font-mono text-gray-700">hog_function:write</code> scope so
+          The key needs the <code className="font-mono text-gray-700">hog_function:write</code> and the <code className="font-mono text-gray-700">query:read</code> scope so
           Notify can provision the inbound webhook on your behalf. Project API keys won't work — PostHog
           only exposes that scope on personal API keys.
         </p>

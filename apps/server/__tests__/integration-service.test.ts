@@ -294,7 +294,7 @@ describe("saveEventSelection", () => {
         projectId: PROJECT_ID,
         baseUrl: "https://eu.posthog.com",
       },
-      { hogFunctionId: HOG_FUNCTION_ID, eventNames: [] }
+      { hogFunctionId: HOG_FUNCTION_ID, eventNames: ["__notify_no_active_posthog_events__"] }
     );
     expect(mockSetPosthogEventSelection.mock.calls[0][1]).toEqual({
       customerId: CUSTOMER_ID,

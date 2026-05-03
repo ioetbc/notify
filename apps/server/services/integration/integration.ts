@@ -1,11 +1,31 @@
 import { randomBytes } from "crypto";
-import type { Db, PosthogIntegrationConfig, PosthogRegion } from "../../db";
-import * as integrationRepo from "../../repository/integration";
+import type {
+  CustomerIntegration,
+  Db,
+  PosthogIntegrationConfig,
+  PosthogRegion,
+} from "../../db";
 import * as eventDefinitionRepo from "../../repository/event-definition";
+import * as integrationRepo from "../../repository/integration";
 
 const POSTHOG_REGION_HOST: Record<PosthogRegion, string> = {
   us: "https://us.posthog.com",
   eu: "https://eu.posthog.com",
+};
+
+export const DISABLED_HOG_FUNCTION_EVENT = "__notify_no_active_posthog_events__";
+
+type PosthogConfig = {
+  personalApiKey: string;
+  projectId: string;
+  baseUrl?: string;
+};
+
+type PosthogIntegrationContext = {
+  row: CustomerIntegration;
+  config: PosthogIntegrationConfig;
+  posthogConfig: PosthogConfig;
+  webhookSecret: string;
 };
 
 export class IntegrationAlreadyExistsError extends Error {
@@ -15,11 +35,9 @@ export class IntegrationAlreadyExistsError extends Error {
   }
 }
 
-// Subset of the PostHog client surface (Chunk A) consumed by this service.
-// Defined here so unit tests can pass a fake without touching the real module.
 export type PosthogClient = {
   createHogFunction: (
-    cfg: { personalApiKey: string; projectId: string; baseUrl?: string },
+    cfg: PosthogConfig,
     args: {
       webhookUrl: string;
       webhookSecret: string;
@@ -28,11 +46,11 @@ export type PosthogClient = {
     }
   ) => Promise<{ hogFunctionId: string }>;
   listRecentEvents: (
-    cfg: { personalApiKey: string; projectId: string; baseUrl?: string },
+    cfg: PosthogConfig,
     args: { days: number; excludePrefixed: boolean; limit: number }
   ) => Promise<Array<{ name: string; volume: number }>>;
   updateHogFunctionFilters: (
-    cfg: { personalApiKey: string; projectId: string; baseUrl?: string },
+    cfg: PosthogConfig,
     args: { hogFunctionId: string; eventNames: string[] }
   ) => Promise<void>;
 };
@@ -67,28 +85,15 @@ export async function connect(
     region: PosthogRegion;
   }
 ): Promise<{ integration_id: string }> {
-  console.log("[integration.connect] start", {
-    customerId: input.customerId,
-    projectId: input.projectId,
-    webhookBaseUrl: deps.webhookBaseUrl,
-  });
-
   const existing = await deps.repo.findByCustomerAndProvider(
     deps.db,
     input.customerId,
     "posthog"
   );
 
-  console.log("[integration.connect] existing lookup", {
-    customerId: input.customerId,
-    found: !!existing,
-    existingId: existing?.id ?? null,
-  });
-
   if (existing) throw new IntegrationAlreadyExistsError();
 
   const webhookSecret = randomBytes(32).toString("hex");
-
   const initialConfig: PosthogIntegrationConfig = {
     personal_api_key_encrypted: encode(input.personalApiKey),
     project_id: input.projectId,
@@ -101,11 +106,6 @@ export async function connect(
     customerId: input.customerId,
     provider: "posthog",
     config: initialConfig,
-  });
-
-  console.log("[integration.connect] row created, success", {
-    integrationId: created.id,
-    customerId: input.customerId,
   });
 
   return { integration_id: created.id };
@@ -122,21 +122,19 @@ export async function getSummary(
   deps: IntegrationDeps,
   input: { customerId: string }
 ): Promise<IntegrationSummary | null> {
-  const found = await deps.repo.findByCustomerAndProvider(
+  const row = await deps.repo.findByCustomerAndProvider(
     deps.db,
     input.customerId,
     "posthog"
   );
-  if (!found) return null;
+  if (!row) return null;
 
-  const cfg = found.config as PosthogIntegrationConfig;
+  const config = row.config as PosthogIntegrationConfig;
   return {
-    id: found.id,
+    id: row.id,
     provider: "posthog",
-    project_id: cfg.project_id,
-    connected_at:
-      (found as { connectedAt?: Date | null }).connectedAt?.toISOString() ??
-      new Date(0).toISOString(),
+    project_id: config.project_id,
+    connected_at: row.connectedAt?.toISOString() ?? new Date(0).toISOString(),
   };
 }
 
@@ -149,33 +147,129 @@ export async function listEvents(
     includeAutocaptured: boolean;
   }
 ): Promise<Array<{ name: string; volume: number; active: boolean }> | null> {
-  const found = await deps.repo.findByCustomerAndProvider(
+  const context = await getPosthogIntegrationContext(deps, input.customerId);
+  if (!context) return null;
+
+  const events = await deps.posthog.listRecentEvents(context.posthogConfig, {
+    days: input.days,
+    limit: input.limit,
+    excludePrefixed: !input.includeAutocaptured,
+  });
+
+  return mergeStoredEventSelection(
+    events,
+    await deps.eventDefinitions.listEventSelectionByIntegration(
+      deps.db,
+      context.row.id
+    )
+  );
+}
+
+export async function saveEventSelection(
+  deps: IntegrationDeps,
+  input: {
+    customerId: string;
+    events: Array<{ name: string; volume?: number | null }>;
+  }
+): Promise<{ event_names: string[] } | null> {
+  const context = await getPosthogIntegrationContext(deps, input.customerId);
+  if (!context) return null;
+
+  const selectedNames = uniqueEventNames(input.events);
+  await syncHogFunctionFilters(deps, context, input.customerId, selectedNames);
+
+  await deps.eventDefinitions.setPosthogEventSelection(deps.db, {
+    customerId: input.customerId,
+    integrationId: context.row.id,
+    events: input.events,
+  });
+
+  return { event_names: selectedNames };
+}
+
+export async function disconnect(
+  deps: IntegrationDeps,
+  input: { customerId: string }
+): Promise<boolean> {
+  const context = await getPosthogIntegrationContext(deps, input.customerId);
+  if (!context) return false;
+
+  await deps.repo.deleteIntegration(deps.db, context.row.id);
+  return true;
+}
+
+async function getPosthogIntegrationContext(
+  deps: IntegrationDeps,
+  customerId: string
+): Promise<PosthogIntegrationContext | null> {
+  const row = await deps.repo.findByCustomerAndProvider(
     deps.db,
-    input.customerId,
+    customerId,
     "posthog"
   );
-  if (!found) return null;
+  if (!row) return null;
 
-  const cfg = found.config as PosthogIntegrationConfig;
-  const personalApiKey = decode(cfg.personal_api_key_encrypted);
-
-  const events = await deps.posthog.listRecentEvents(
-    {
-      personalApiKey,
-      projectId: cfg.project_id,
-      baseUrl: POSTHOG_REGION_HOST[cfg.region ?? "us"],
+  const config = row.config as PosthogIntegrationConfig;
+  return {
+    row,
+    config,
+    posthogConfig: {
+      personalApiKey: decode(config.personal_api_key_encrypted),
+      projectId: config.project_id,
+      baseUrl: POSTHOG_REGION_HOST[config.region ?? "us"],
     },
-    {
-      days: input.days,
-      limit: input.limit,
-      excludePrefixed: !input.includeAutocaptured,
-    }
-  );
+    webhookSecret: decode(config.webhook_secret_encrypted),
+  };
+}
 
-  const stored = await deps.eventDefinitions.listEventSelectionByIntegration(
-    deps.db,
-    found.id
-  );
+async function syncHogFunctionFilters(
+  deps: IntegrationDeps,
+  context: PosthogIntegrationContext,
+  customerId: string,
+  selectedNames: string[]
+): Promise<void> {
+  const filterNames = selectedNames.length > 0
+    ? selectedNames
+    : [DISABLED_HOG_FUNCTION_EVENT];
+
+  if (!context.config.hog_function_id) {
+    if (selectedNames.length === 0) return;
+
+    const { hogFunctionId } = await deps.posthog.createHogFunction(
+      context.posthogConfig,
+      {
+        webhookUrl: buildWebhookUrl(deps.webhookBaseUrl, customerId),
+        webhookSecret: context.webhookSecret,
+        eventNames: selectedNames,
+        customerId,
+      }
+    );
+
+    await deps.repo.updateConfig(deps.db, context.row.id, {
+      ...context.config,
+      hog_function_id: hogFunctionId,
+    });
+    return;
+  }
+
+  await deps.posthog.updateHogFunctionFilters(context.posthogConfig, {
+    hogFunctionId: context.config.hog_function_id,
+    eventNames: filterNames,
+  });
+}
+
+function buildWebhookUrl(baseUrl: string, customerId: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}/webhooks/posthog/${customerId}`;
+}
+
+function uniqueEventNames(events: Array<{ name: string }>): string[] {
+  return [...new Set(events.map((event) => event.name))];
+}
+
+function mergeStoredEventSelection(
+  events: Array<{ name: string; volume: number }>,
+  stored: Array<{ name: string; active: boolean; volume: number | null }>
+): Array<{ name: string; volume: number; active: boolean }> {
   const storedByName = new Map(stored.map((event) => [event.name, event]));
   const returnedNames = new Set(events.map((event) => event.name));
   const merged = events.map((event) => ({
@@ -194,77 +288,4 @@ export async function listEvents(
   }
 
   return merged;
-}
-
-export async function saveEventSelection(
-  deps: IntegrationDeps,
-  input: {
-    customerId: string;
-    events: Array<{ name: string; volume?: number | null }>;
-  }
-): Promise<{ event_names: string[] } | null> {
-  const found = await deps.repo.findByCustomerAndProvider(
-    deps.db,
-    input.customerId,
-    "posthog"
-  );
-  if (!found) return null;
-
-  const cfg = found.config as PosthogIntegrationConfig;
-  const personalApiKey = decode(cfg.personal_api_key_encrypted);
-  const webhookSecret = decode(cfg.webhook_secret_encrypted);
-  const selectedNames = [...new Set(input.events.map((event) => event.name))];
-  const posthogCfg = {
-    personalApiKey,
-    projectId: cfg.project_id,
-    baseUrl: POSTHOG_REGION_HOST[cfg.region ?? "us"],
-  };
-
-  if (selectedNames.length > 0 && !cfg.hog_function_id) {
-    const webhookUrl = `${deps.webhookBaseUrl.replace(/\/+$/, "")}/webhooks/posthog/${input.customerId}`;
-    const { hogFunctionId } = await deps.posthog.createHogFunction(
-      posthogCfg,
-      {
-        webhookUrl,
-        webhookSecret,
-        eventNames: selectedNames,
-        customerId: input.customerId,
-      }
-    );
-
-    await deps.repo.updateConfig(deps.db, found.id, {
-      ...cfg,
-      hog_function_id: hogFunctionId,
-    });
-  } else if (cfg.hog_function_id) {
-    await deps.posthog.updateHogFunctionFilters(posthogCfg, {
-      hogFunctionId: cfg.hog_function_id,
-      eventNames: selectedNames,
-    });
-  }
-
-  await deps.eventDefinitions.setPosthogEventSelection(deps.db, {
-    customerId: input.customerId,
-    integrationId: found.id,
-    events: input.events,
-  });
-
-  return { event_names: selectedNames };
-}
-
-export async function disconnect(
-  deps: IntegrationDeps,
-  input: { customerId: string }
-): Promise<boolean> {
-  const found = await deps.repo.findByCustomerAndProvider(
-    deps.db,
-    input.customerId,
-    "posthog"
-  );
-  if (!found) return false;
-
-  // Intentionally leave the hog function in place. Stranding a no-op function
-  // is preferable to deleting the wrong one off a stale id.
-  await deps.repo.deleteIntegration(deps.db, found.id);
-  return true;
 }

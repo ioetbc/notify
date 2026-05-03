@@ -1,1 +1,1 @@
-export { IntegrationsPage } from './integrations';
+export { IntegrationsPage } from '../../components/integrations';

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button } from '../../components/ui/button';
+import { Button } from '../ui/button';
 import {
   Dialog,
   DialogContent,
@@ -7,7 +7,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '../../components/ui/dialog';
+} from '../ui/dialog';
 import type { IntegrationSummary } from '../../lib/api/integrations';
 
 export type ConnectedStateProps = {
