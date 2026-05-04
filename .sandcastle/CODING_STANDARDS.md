@@ -39,10 +39,10 @@ Use plain `if`/early returns for simple boolean checks — don't reach for `matc
 Always run tests through SST shell so secrets and bindings are loaded:
 
 ```
-sst shell -- bun test
+npx sst shell -- bun test
 ```
 
-Equivalent to `bun run test`. Bare `bun test` will be missing env vars.
+Equivalent to `bun run test`. Bare `bun test` will be missing env vars. Use `npx sst shell` rather than bare `sst shell` — `sst` may not be on PATH in sandboxed environments.
 
 ---
 
@@ -179,6 +179,12 @@ Avoid shallow modules: large interface with many methods that just pass through 
 1. **Accept dependencies, don't create them** — pass external dependencies in rather than constructing them internally.
 2. **Return results, don't produce side effects** — a function that returns a value is easier to test than one that mutates state.
 3. **Small surface area** — fewer methods = fewer tests needed, fewer params = simpler test setup.
+
+---
+
+## Database Changes
+
+Only modify the Drizzle schema. Never hand-write SQL migration files, and never run migration commands against the database. The user generates and applies migrations themselves.
 
 ---
 
