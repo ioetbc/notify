@@ -165,6 +165,16 @@ export function Settings() {
             <p><span className="text-gray-500">PAT:</span> {integration.masked_pat}</p>
             <p><span className="text-gray-500">Team ID:</span> {integration.team_id}</p>
             <p><span className="text-gray-500">Identity field:</span> {integration.identity_field}</p>
+            <p>
+              <span className="text-gray-500">Events received:</span>{' '}
+              {integration.event_count ?? 0}
+            </p>
+            <p>
+              <span className="text-gray-500">Last event at:</span>{' '}
+              {integration.last_event_at
+                ? new Date(integration.last_event_at).toLocaleString()
+                : 'No events yet'}
+            </p>
           </div>
           <div>
             <p className="text-sm text-gray-500 mb-1">Enabled events:</p>

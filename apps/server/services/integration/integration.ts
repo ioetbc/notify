@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, count, max } from "drizzle-orm";
 import { db, posthogIntegration, customerEventDefinition, workflow, event } from "../../db";
 import { encrypt, decrypt } from "../crypto";
 import * as posthogClient from "../posthog-client";
@@ -318,12 +318,27 @@ export async function getPosthogIntegration(customerId: string) {
       )
     );
 
+  const [stats] = await db
+    .select({
+      eventCount: count(event.id),
+      lastEventAt: max(event.createdAt),
+    })
+    .from(event)
+    .where(
+      and(
+        eq(event.customerId, customerId),
+        eq(event.source, "posthog")
+      )
+    );
+
   return {
     id: integration.id,
     masked_pat: maskPat(decryptedPat),
     team_id: integration.teamId,
     identity_field: integration.identityField,
     hog_function_id: integration.hogFunctionId,
+    event_count: stats.eventCount,
+    last_event_at: stats.lastEventAt,
     event_definitions: definitions.map((d) => ({
       id: d.id,
       name: d.name,
