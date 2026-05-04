@@ -24,16 +24,17 @@ import type {
 } from './types';
 import type { CanvasNode, UserColumn } from './utils';
 import { formatTriggerEvent, SYSTEM_EVENTS } from './utils';
+import type { EventDefinition } from './hooks';
 
 interface ConfigPanelProps {
   node: CanvasNode;
   onUpdate: (config: TriggerNodeData['config'] | WaitNodeData['config'] | BranchNodeData['config'] | SendNodeData['config'] | FilterNodeData['config']) => void;
   onClose: () => void;
   userColumns: UserColumn[];
-  eventNames: string[];
+  eventDefinitions: EventDefinition[];
 }
 
-export function ConfigPanel({ node, onUpdate, onClose, userColumns, eventNames }: ConfigPanelProps) {
+export function ConfigPanel({ node, onUpdate, onClose, userColumns, eventDefinitions }: ConfigPanelProps) {
   const data = node.data;
   const [draft, setDraft] = useState(data.config);
   const title = `${data.type.charAt(0).toUpperCase()}${data.type.slice(1)} Step`;
@@ -55,7 +56,7 @@ export function ConfigPanel({ node, onUpdate, onClose, userColumns, eventNames }
           <TriggerConfig
             config={draft as TriggerNodeData['config']}
             onChange={(c) => setDraft(c)}
-            eventNames={eventNames}
+            eventDefinitions={eventDefinitions}
           />
         ))
         .with({ type: 'wait' }, () => (
@@ -113,12 +114,14 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function TriggerConfig({
   config,
   onChange,
-  eventNames,
+  eventDefinitions,
 }: {
   config: TriggerNodeData['config'];
   onChange: (config: TriggerNodeData['config']) => void;
-  eventNames: string[];
+  eventDefinitions: EventDefinition[];
 }) {
+  const customEvents = eventDefinitions.filter((d) => d.enabledAsTrigger);
+
   return (
     <div className="space-y-3">
       <Field label="Trigger Type">
@@ -126,7 +129,7 @@ function TriggerConfig({
           value={config.triggerType}
           onValueChange={(v) => {
             const triggerType = v as TriggerType;
-            const event = triggerType === 'system' ? SYSTEM_EVENTS[0] : (eventNames[0] ?? '');
+            const event = triggerType === 'system' ? SYSTEM_EVENTS[0] : (customEvents[0]?.name ?? '');
             onChange({ triggerType, event });
           }}
         >
@@ -157,7 +160,7 @@ function TriggerConfig({
               ))}
             </SelectContent>
           </Select>
-        ) : eventNames.length === 0 ? (
+        ) : customEvents.length === 0 ? (
           <p className="text-sm text-gray-500">No events tracked yet</p>
         ) : (
           <Select
@@ -168,9 +171,9 @@ function TriggerConfig({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {eventNames.map((name) => (
-                <SelectItem key={name} value={name}>
-                  {formatTriggerEvent(name)}
+              {customEvents.map((def) => (
+                <SelectItem key={def.id} value={def.name}>
+                  {formatTriggerEvent(def.name)}
                 </SelectItem>
               ))}
             </SelectContent>

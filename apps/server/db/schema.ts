@@ -48,6 +48,8 @@ export const dispatchStatusEnum = pgEnum("dispatch_status", [
 
 export const deliveryProviderEnum = pgEnum("delivery_provider", ["expo"]);
 
+export const eventSourceEnum = pgEnum("event_source", ["customer_api", "posthog"]);
+
 
 export const customer = pgTable("customer", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -77,6 +79,22 @@ export const user = pgTable(
   (table) => [unique().on(table.customerId, table.externalId)]
 );
 
+export const customerEventDefinition = pgTable(
+  "customer_event_definition",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customer.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    source: eventSourceEnum("source").notNull(),
+    enabledAsTrigger: boolean("enabled_as_trigger").default(true).notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [unique().on(table.customerId, table.name, table.source)]
+);
+
 export const workflow = pgTable("workflow", {
   id: uuid("id").primaryKey().defaultRandom(),
   customerId: uuid("customer_id")
@@ -84,7 +102,9 @@ export const workflow = pgTable("workflow", {
     .references(() => customer.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   triggerType: triggerTypeEnum("trigger_type").notNull(),
-  triggerEvent: text("trigger_event").notNull(),
+  triggerEventDefinitionId: uuid("trigger_event_definition_id")
+    .notNull()
+    .references(() => customerEventDefinition.id),
   status: workflowStatusEnum("status").default("draft").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
@@ -204,6 +224,10 @@ export const event = pgTable("event", {
     .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
   eventName: text("event_name").notNull(),
+  source: eventSourceEnum("source").notNull(),
+  eventDefinitionId: uuid("event_definition_id")
+    .notNull()
+    .references(() => customerEventDefinition.id),
   properties: jsonb("properties"),
   timestamp: timestamp("timestamp", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
@@ -226,6 +250,7 @@ export const customerRelations = relations(customer, ({ many }) => ({
   users: many(user),
   workflows: many(workflow),
   events: many(event),
+  eventDefinitions: many(customerEventDefinition),
 }));
 
 export const userRelations = relations(user, ({ one, many }) => ({
@@ -238,10 +263,24 @@ export const userRelations = relations(user, ({ one, many }) => ({
   pushTokens: many(pushToken),
 }));
 
+export const customerEventDefinitionRelations = relations(
+  customerEventDefinition,
+  ({ one }) => ({
+    customer: one(customer, {
+      fields: [customerEventDefinition.customerId],
+      references: [customer.id],
+    }),
+  })
+);
+
 export const workflowRelations = relations(workflow, ({ one, many }) => ({
   customer: one(customer, {
     fields: [workflow.customerId],
     references: [customer.id],
+  }),
+  triggerEventDefinition: one(customerEventDefinition, {
+    fields: [workflow.triggerEventDefinitionId],
+    references: [customerEventDefinition.id],
   }),
   steps: many(step),
   enrollments: many(workflowEnrollment),
@@ -301,6 +340,10 @@ export const eventRelations = relations(event, ({ one }) => ({
     fields: [event.userId],
     references: [user.id],
   }),
+  definition: one(customerEventDefinition, {
+    fields: [event.eventDefinitionId],
+    references: [customerEventDefinition.id],
+  }),
 }));
 
 export const pushTokenRelations = relations(pushToken, ({ one }) => ({
@@ -326,6 +369,8 @@ export const dispatchRelations = relations(dispatch, ({ one }) => ({
 
 export type Customer = typeof customer.$inferSelect;
 export type NewCustomer = typeof customer.$inferInsert;
+export type CustomerEventDefinition = typeof customerEventDefinition.$inferSelect;
+export type NewCustomerEventDefinition = typeof customerEventDefinition.$inferInsert;
 export type Workflow = typeof workflow.$inferSelect;
 export type NewWorkflow = typeof workflow.$inferInsert;
 export type Step = typeof step.$inferSelect;

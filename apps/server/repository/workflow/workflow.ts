@@ -6,6 +6,7 @@ import type { StepInput, EdgeInput } from "./workflow.types";
 export async function findWorkflowById(workflowId: string) {
   return db.query.workflow.findFirst({
     where: eq(workflow.id, workflowId),
+    with: { triggerEventDefinition: true },
   });
 }
 
@@ -24,7 +25,7 @@ export async function createWorkflow(values: NewWorkflow) {
 
 export async function updateWorkflow(
   workflowId: string,
-  values: Partial<Pick<Workflow, "name" | "triggerEvent" | "status">>
+  values: Partial<Pick<Workflow, "name" | "triggerEventDefinitionId" | "status">>
 ) {
   const [updated] = await db
     .update(workflow)

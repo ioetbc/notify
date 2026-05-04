@@ -7,6 +7,9 @@ const mockUpdateUserAttributes = mock<any>();
 const mockCreateEvent = mock<any>();
 const mockFindActiveWorkflowsByTriggerEvent = mock<any>();
 const mockCreateWorkflowEnrollment = mock<any>();
+const mockUpsertEventDefinition = mock<any>();
+const mockFindEventDefinitionsByCustomer = mock<any>();
+const mockFindEventDefinitionByName = mock<any>();
 
 mock.module("../repository/public", () => ({
   findUserByExternalId: mockFindUserByExternalId,
@@ -15,6 +18,9 @@ mock.module("../repository/public", () => ({
   createEvent: mockCreateEvent,
   findActiveWorkflowsByTriggerEvent: mockFindActiveWorkflowsByTriggerEvent,
   createWorkflowEnrollment: mockCreateWorkflowEnrollment,
+  upsertEventDefinition: mockUpsertEventDefinition,
+  findEventDefinitionsByCustomer: mockFindEventDefinitionsByCustomer,
+  findEventDefinitionByName: mockFindEventDefinitionByName,
 }));
 
 // ── Mock: repository/workflow ────────────────────────────────────────
@@ -40,6 +46,7 @@ const CUSTOMER_ID = "cust-1";
 const USER_ID = "user-1";
 const WORKFLOW_ID = "wf-1";
 const STEP_ID = "step-1";
+const DEFINITION_ID = "def-1";
 
 function fakeUser(overrides?: Record<string, unknown>) {
   return {
@@ -54,13 +61,26 @@ function fakeUser(overrides?: Record<string, unknown>) {
   };
 }
 
+function fakeDefinition(overrides?: Record<string, unknown>) {
+  return {
+    id: DEFINITION_ID,
+    customerId: CUSTOMER_ID,
+    name: "user_created",
+    source: "customer_api" as const,
+    enabledAsTrigger: true,
+    firstSeenAt: new Date(),
+    lastSeenAt: new Date(),
+    ...overrides,
+  };
+}
+
 function fakeWorkflow(overrides?: Record<string, unknown>) {
   return {
     id: WORKFLOW_ID,
     customerId: CUSTOMER_ID,
     name: "Test Workflow",
     triggerType: "system" as const,
-    triggerEvent: "user_created",
+    triggerEventDefinitionId: DEFINITION_ID,
     status: "active" as const,
     createdAt: new Date(),
     ...overrides,
@@ -100,6 +120,9 @@ beforeEach(() => {
   mockCreateEvent.mockReset();
   mockFindActiveWorkflowsByTriggerEvent.mockReset();
   mockCreateWorkflowEnrollment.mockReset();
+  mockUpsertEventDefinition.mockReset();
+  mockFindEventDefinitionsByCustomer.mockReset();
+  mockFindEventDefinitionByName.mockReset();
   mockFindStepsByWorkflowId.mockReset();
   mockFindEdgesByWorkflowId.mockReset();
 });
@@ -192,17 +215,21 @@ describe("updateUserAttributes", () => {
 });
 
 describe("trackEvent", () => {
-  it("enrolls user into workflows matching the event name", async () => {
+  it("upserts event definition and enrolls user into matching workflows", async () => {
+    const def = fakeDefinition({ name: "purchase_completed" });
     mockFindUserByExternalId.mockResolvedValue(fakeUser());
+    mockUpsertEventDefinition.mockResolvedValue(def);
     mockCreateEvent.mockResolvedValue({
       id: "evt-1",
       eventName: "purchase_completed",
+      source: "customer_api",
+      eventDefinitionId: def.id,
       createdAt: new Date(),
     });
     mockFindActiveWorkflowsByTriggerEvent.mockResolvedValue([
       fakeWorkflow({
         triggerType: "custom",
-        triggerEvent: "purchase_completed",
+        triggerEventDefinitionId: def.id,
       }),
     ]);
 
@@ -222,14 +249,27 @@ describe("trackEvent", () => {
 
     expect(result).not.toBeNull();
     expect(result!.workflows_triggered).toBe(1);
+    expect(mockUpsertEventDefinition).toHaveBeenCalledWith(
+      CUSTOMER_ID,
+      "purchase_completed",
+      "customer_api"
+    );
+    expect(mockCreateEvent).toHaveBeenCalledTimes(1);
+    const eventArg = mockCreateEvent.mock.calls[0][0] as Record<string, unknown>;
+    expect(eventArg.source).toBe("customer_api");
+    expect(eventArg.eventDefinitionId).toBe(def.id);
     expect(mockCreateWorkflowEnrollment).toHaveBeenCalledTimes(1);
   });
 
   it("returns correct workflows_triggered count with multiple workflows", async () => {
+    const def = fakeDefinition({ name: "purchase_completed" });
     mockFindUserByExternalId.mockResolvedValue(fakeUser());
+    mockUpsertEventDefinition.mockResolvedValue(def);
     mockCreateEvent.mockResolvedValue({
       id: "evt-1",
       eventName: "purchase_completed",
+      source: "customer_api",
+      eventDefinitionId: def.id,
       createdAt: new Date(),
     });
     mockFindActiveWorkflowsByTriggerEvent.mockResolvedValue([
@@ -262,6 +302,7 @@ describe("trackEvent", () => {
     );
 
     expect(result).toBeNull();
+    expect(mockUpsertEventDefinition).not.toHaveBeenCalled();
     expect(mockCreateEvent).not.toHaveBeenCalled();
     expect(mockCreateWorkflowEnrollment).not.toHaveBeenCalled();
   });

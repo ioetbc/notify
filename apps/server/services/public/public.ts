@@ -140,10 +140,18 @@ export async function trackEvent(
 
   if (!foundUser) return null;
 
+  const definition = await repository.upsertEventDefinition(
+    customerId,
+    eventName,
+    "customer_api"
+  );
+
   const evt = await repository.createEvent({
     customerId,
     userId: foundUser.id,
     eventName,
+    source: "customer_api",
+    eventDefinitionId: definition.id,
     properties: properties ?? null,
     timestamp: timestamp ? new Date(timestamp) : new Date(),
   });
