@@ -32,7 +32,7 @@ import { ConfigPanel } from './config-panel';
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useUserColumns, useEventNames } from './hooks';
+import { useUserColumns, useEventDefinitions } from './hooks';
 import { useWorkflowSession } from './workflow-session';
 
 type Snapshot = { nodes: CanvasNode[]; edges: Edge[] };
@@ -105,7 +105,7 @@ function CanvasInner({ workflowId }: { workflowId?: string }) {
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null;
 
   const { data: userColumns = [] } = useUserColumns();
-  const { data: eventNames = [] } = useEventNames();
+  const { data: eventDefinitions = [] } = useEventDefinitions();
 
   const isValidConnection = useCallback(
     (connection: Connection | Edge) => {
@@ -315,7 +315,7 @@ function CanvasInner({ workflowId }: { workflowId?: string }) {
               onUpdate={(config) => updateNodeData(selectedNode.id, config)}
               onClose={() => setSelectedNodeId(null)}
               userColumns={userColumns}
-              eventNames={eventNames}
+              eventDefinitions={eventDefinitions}
             />
           )}
         </div>

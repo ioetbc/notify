@@ -3,6 +3,13 @@ import { useQuery } from '@tanstack/react-query';
 import { client } from '../../lib/api';
 import type { UserColumn } from './utils';
 
+export interface EventDefinition {
+  id: string;
+  name: string;
+  source: 'customer_api' | 'posthog';
+  enabledAsTrigger: boolean;
+}
+
 export function useUserColumns() {
   return useQuery({
     queryKey: ['user-columns'],
@@ -14,13 +21,13 @@ export function useUserColumns() {
   });
 }
 
-export function useEventNames() {
+export function useEventDefinitions() {
   return useQuery({
-    queryKey: ['event-names'],
+    queryKey: ['event-definitions'],
     queryFn: async () => {
-      const res = await client['event-names'].$get();
+      const res = await client['event-definitions'].$get();
       const data = await res.json();
-      return data.event_names as string[];
+      return data.event_definitions as EventDefinition[];
     },
   });
 }

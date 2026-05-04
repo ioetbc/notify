@@ -6,6 +6,7 @@ import {
   workflow,
   workflowEnrollment,
   pushToken,
+  customerEventDefinition,
 } from "../../db";
 import type { NewEvent } from "../../db";
 import type { Attributes } from "../../schemas/public";
@@ -58,6 +59,48 @@ export async function updateUserAttributes(
   return updated;
 }
 
+export async function upsertEventDefinition(
+  customerId: string,
+  name: string,
+  source: "customer_api" | "posthog"
+) {
+  const now = new Date();
+  const [row] = await db
+    .insert(customerEventDefinition)
+    .values({ customerId, name, source, firstSeenAt: now, lastSeenAt: now })
+    .onConflictDoUpdate({
+      target: [
+        customerEventDefinition.customerId,
+        customerEventDefinition.name,
+        customerEventDefinition.source,
+      ],
+      set: { lastSeenAt: now },
+    })
+    .returning();
+  return row;
+}
+
+export async function findEventDefinitionsByCustomer(customerId: string) {
+  return db
+    .select()
+    .from(customerEventDefinition)
+    .where(eq(customerEventDefinition.customerId, customerId));
+}
+
+export async function findEventDefinitionByName(
+  customerId: string,
+  name: string,
+  source: "customer_api" | "posthog"
+) {
+  return db.query.customerEventDefinition.findFirst({
+    where: and(
+      eq(customerEventDefinition.customerId, customerId),
+      eq(customerEventDefinition.name, name),
+      eq(customerEventDefinition.source, source)
+    ),
+  });
+}
+
 export async function createEvent(values: NewEvent) {
   const [created] = await db.insert(event).values(values).returning();
   return created;
@@ -65,18 +108,25 @@ export async function createEvent(values: NewEvent) {
 
 export async function findActiveWorkflowsByTriggerEvent(
   customerId: string,
-  eventName: string
+  eventName: string,
+  source?: "customer_api" | "posthog"
 ) {
+  const conditions = [
+    eq(workflow.customerId, customerId),
+    eq(customerEventDefinition.name, eventName),
+    eq(workflow.status, "active"),
+  ];
+  if (source) {
+    conditions.push(eq(customerEventDefinition.source, source));
+  }
   return db
-    .select()
+    .select({ id: workflow.id, customerId: workflow.customerId, name: workflow.name, triggerType: workflow.triggerType, triggerEventDefinitionId: workflow.triggerEventDefinitionId, status: workflow.status, createdAt: workflow.createdAt })
     .from(workflow)
-    .where(
-      and(
-        eq(workflow.customerId, customerId),
-        eq(workflow.triggerEvent, eventName),
-        eq(workflow.status, "active")
-      )
-    );
+    .innerJoin(
+      customerEventDefinition,
+      eq(workflow.triggerEventDefinitionId, customerEventDefinition.id)
+    )
+    .where(and(...conditions));
 }
 
 export async function createWorkflowEnrollment(values: {

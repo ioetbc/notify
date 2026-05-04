@@ -24,9 +24,14 @@ export default $config({
       },
     });
 
+    const integrationEncryptionKey = new sst.Secret('IntegrationEncryptionKey');
+
     const adminApi = new sst.aws.Function('AdminApi', {
       handler: 'apps/server/functions/admin/index.handler',
-      link: [db],
+      link: [db, integrationEncryptionKey],
+      environment: {
+        INTEGRATION_ENCRYPTION_KEY: integrationEncryptionKey.value,
+      },
       nodejs: {
         install: ['expo-server-sdk'],
       },

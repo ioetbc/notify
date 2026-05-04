@@ -9,6 +9,7 @@ import { NewCampaign } from './pages/new-campaign';
 import { NewTransactional } from './pages/new-transactional';
 import { NewLoop } from './pages/new-loop';
 import { NewWorkflowPage, EditWorkflowPage } from './pages/workflow';
+import { Settings } from './pages/settings';
 
 function App() {
   return (
@@ -24,6 +25,7 @@ function App() {
             <Route path="/loops/new" element={<NewLoop />} />
             <Route path="/workflow" element={<NewWorkflowPage />} />
             <Route path="/workflow/:id" element={<EditWorkflowPage />} />
+            <Route path="/settings" element={<Settings />} />
           </Route>
         </Routes>
       </BrowserRouter>

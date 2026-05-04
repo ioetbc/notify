@@ -1,4 +1,5 @@
 import * as repository from "../../repository/workflow";
+import * as publicRepo from "../../repository/public";
 import type { CreateWorkflowInput, UpdateWorkflowInput, CanvasStep, CanvasEdge } from "./workflow.types";
 
 function toStepInputs(workflowId: string, steps: CanvasStep[]) {
@@ -20,9 +21,16 @@ function toEdgeInputs(workflowId: string, edges: CanvasEdge[]) {
 }
 
 export async function getWorkflow(workflowId: string) {
-  const workflow = await repository.findWorkflowById(workflowId);
+  const result = await repository.findWorkflowById(workflowId);
 
-  if (!workflow) return null;
+  if (!result) return null;
+
+  const { triggerEventDefinition, ...workflowRow } = result;
+
+  const workflow = {
+    ...workflowRow,
+    triggerEvent: triggerEventDefinition?.name ?? null,
+  };
 
   const steps = await repository.findStepsByWorkflowId(workflowId);
   const edges = await repository.findEdgesByWorkflowId(workflowId);
@@ -35,18 +43,24 @@ export async function listWorkflows() {
 }
 
 export async function createWorkflow(customerId: string, input: CreateWorkflowInput) {
+  const definition = await publicRepo.upsertEventDefinition(
+    customerId,
+    input.trigger_event,
+    "customer_api"
+  );
+
   const workflow = await repository.createWorkflow({
     customerId,
     name: input.name,
     triggerType: input.trigger_type,
-    triggerEvent: input.trigger_event,
+    triggerEventDefinitionId: definition.id,
     status: "draft",
   });
 
   await repository.insertSteps(toStepInputs(workflow.id, input.steps));
   await repository.insertEdges(toEdgeInputs(workflow.id, input.edges));
 
-  return workflow;
+  return { ...workflow, triggerEvent: definition.name };
 }
 
 export async function publishWorkflow(workflowId: string) {
@@ -54,10 +68,18 @@ export async function publishWorkflow(workflowId: string) {
 }
 
 export async function updateWorkflow(workflowId: string, input: UpdateWorkflowInput) {
+  const existing = await repository.findWorkflowById(workflowId);
+  if (!existing) return null;
+
+  const definition = await publicRepo.upsertEventDefinition(
+    existing.customerId,
+    input.trigger_event,
+    "customer_api"
+  );
+
   const updatedWorkflow = await repository.updateWorkflow(workflowId, {
     name: input.name,
-    triggerType: input.trigger_type,
-    triggerEvent: input.trigger_event,
+    triggerEventDefinitionId: definition.id,
   });
 
   if (!updatedWorkflow) return null;
@@ -66,5 +88,5 @@ export async function updateWorkflow(workflowId: string, input: UpdateWorkflowIn
   await repository.insertSteps(toStepInputs(workflowId, input.steps));
   await repository.insertEdges(toEdgeInputs(workflowId, input.edges));
 
-  return updatedWorkflow;
+  return { ...updatedWorkflow, triggerEvent: definition.name };
 }
