@@ -94,6 +94,104 @@ export async function connectPosthog(
   };
 }
 
+/** Update a connected PostHog integration. */
+export async function updatePosthogIntegration(
+  customerId: string,
+  updates: {
+    pat?: string;
+    team_id?: string;
+    identity_field?: string;
+    enabled_events?: string[];
+  }
+) {
+  const integration = await db.query.posthogIntegration.findFirst({
+    where: eq(posthogIntegration.customerId, customerId),
+  });
+
+  if (!integration) return { error: "not_connected" as const };
+
+  if (updates.team_id && updates.team_id !== integration.teamId) {
+    return { error: "team_id_change_not_allowed" as const };
+  }
+
+  const setValues: Record<string, unknown> = { updatedAt: new Date() };
+
+  if (updates.pat && updates.pat.length > 0) {
+    setValues.encryptedPat = encrypt(updates.pat, ENCRYPTION_KEY);
+  }
+
+  if (updates.identity_field) {
+    setValues.identityField = updates.identity_field;
+  }
+
+  await db
+    .update(posthogIntegration)
+    .set(setValues)
+    .where(eq(posthogIntegration.id, integration.id));
+
+  if (updates.enabled_events) {
+    const existing = await db
+      .select()
+      .from(customerEventDefinition)
+      .where(
+        and(
+          eq(customerEventDefinition.customerId, customerId),
+          eq(customerEventDefinition.source, "posthog")
+        )
+      );
+
+    const enabledSet = new Set(updates.enabled_events);
+
+    for (const def of existing) {
+      const shouldEnable = enabledSet.has(def.name);
+      if (def.enabledAsTrigger !== shouldEnable) {
+        await db
+          .update(customerEventDefinition)
+          .set({ enabledAsTrigger: shouldEnable })
+          .where(eq(customerEventDefinition.id, def.id));
+      }
+    }
+
+    for (const eventName of updates.enabled_events) {
+      if (!existing.some((d) => d.name === eventName)) {
+        await db.insert(customerEventDefinition).values({
+          customerId,
+          name: eventName,
+          source: "posthog",
+          enabledAsTrigger: true,
+        });
+      }
+    }
+
+    const allDefs = await db
+      .select()
+      .from(customerEventDefinition)
+      .where(
+        and(
+          eq(customerEventDefinition.customerId, customerId),
+          eq(customerEventDefinition.source, "posthog"),
+          eq(customerEventDefinition.enabledAsTrigger, true)
+        )
+      );
+
+    const enabledNames = allDefs.map((d) => d.name);
+    const pat = updates.pat && updates.pat.length > 0
+      ? updates.pat
+      : decrypt(integration.encryptedPat, ENCRYPTION_KEY);
+
+    if (integration.hogFunctionId) {
+      await posthogClient.updateHogFunction(
+        pat,
+        integration.teamId,
+        integration.hogFunctionId,
+        enabledNames
+      );
+    }
+  }
+
+  return { ok: true as const };
+}
+
 /** Get integration state for the settings screen. */
 export async function getPosthogIntegration(customerId: string) {
   const integration = await db.query.posthogIntegration.findFirst({

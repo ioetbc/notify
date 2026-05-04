@@ -1,1 +1,1 @@
-export { previewPosthogSchema, connectPosthogSchema } from "./integration";
+export { previewPosthogSchema, connectPosthogSchema, updatePosthogSchema } from "./integration";

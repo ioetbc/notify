@@ -11,3 +11,10 @@ export const connectPosthogSchema = z.object({
   identity_field: z.string().min(1).default("distinct_id"),
   enabled_events: z.array(z.string().min(1)).min(1),
 });
+
+export const updatePosthogSchema = z.object({
+  pat: z.string().optional(),
+  team_id: z.string().optional(),
+  identity_field: z.string().min(1).optional(),
+  enabled_events: z.array(z.string().min(1)).optional(),
+});
