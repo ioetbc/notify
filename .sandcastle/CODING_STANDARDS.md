@@ -1,58 +1,85 @@
-Wherever possible, use Effect primitives like `FileSystem` over promises. This is so that we can make use of DI and type-safe errors from Effect. However, Effect should not leak out into the user-facing API.
+## Project Stack
 
-Even if the outer function is a promise (such as in user-facing API's) the inner function should immediately delegate to Effect. Running multiple `.runPromise`'s inside a single function should be a red flag that we need to refactor to something like this:
+This is a React + Vite + SST project using:
+
+- **TypeScript** — strict typing throughout
+- **React 19** with React Router
+- **SST** for infrastructure and dev orchestration
+- **Hono** for API routes
+- **Neon** (`@neondatabase/serverless`) for the database
+- **TanStack Query** for client-side data fetching
+- **Tailwind v4** + Radix UI primitives + `class-variance-authority` for styling
+- **ts-pattern** for control flow
+- **Bun** as the test runner (via `sst shell`)
+
+Do not introduce Effect, RxJS, or other large runtime/control-flow frameworks. Stick to the libraries already in `package.json`.
+
+---
+
+## Control Flow
+
+Prefer `ts-pattern`'s `match` with `.exhaustive()` over `switch` statements or chained `if/else if` when branching on a discriminated union, status enum, or tagged variant. Exhaustiveness checking catches missed cases at compile time.
 
 ```ts
-const outerFunc = async () => {
-  const inner = Effect.gen(function* () {
-    // Do stuff in here
-  }).pipe(Effect.runPromise);
-};
+import { match } from "ts-pattern";
+
+const label = match(status)
+  .with("pending", () => "Waiting")
+  .with("running", () => "In progress")
+  .with("done", () => "Complete")
+  .exhaustive();
 ```
 
----
-
-Before writing a changeset, explore other potentially related changesets so you don't duplicate effort.
-
-You may write more than one changeset per commit, if the commit touches multiple user-facing behaviors.
+Use plain `if`/early returns for simple boolean checks — don't reach for `match` when there's nothing to match against.
 
 ---
 
-When writing sandbox providers, don't use any shared abstractions between them. Each provider, for instance Vercel and Daytona, is a different concern and shouldn't share code.
+## Running Tests
+
+Always run tests through SST shell so secrets and bindings are loaded:
+
+```
+sst shell -- bun test
+```
+
+Equivalent to `bun run test`. Bare `bun test` will be missing env vars.
 
 ---
 
-`exec` with an `onLine` callback must call `onLine` in real-time as output arrives, not after the command completes. The orchestrator uses `onLine` callbacks to reset an idle timeout — if lines aren't emitted during execution, the timeout will fire prematurely or hangs won't be detected. Always use a streaming/WebSocket-based API from the underlying SDK, never execute-then-split.
+## Optional Parameters
+
+Optional parameters are a major source of bugs by omission. Scrutinise them carefully and prioritise correctness over backwards compatibility — if a param should be required, make it required and update callers.
 
 ---
 
-Any public-facing properties or functions should have JSDOC comments explaining them.
+## Imports
+
+Use top-level `import` statements for Node built-ins and project modules. Avoid lazy `import()`-style imports unless there's a specific reason (e.g. genuine circular-dep break, dynamic plugin loading).
 
 ---
 
-Do not use lazy `import()`-style imports when importing Node built-ins. Just use imports.
+## Public APIs
+
+Any exported function, type, or component intended for use outside its module should have a JSDoc comment explaining its purpose and any non-obvious behavior.
 
 ---
 
-Optional parameters passed to functions should be scrutinised extremely carefully. They are a huge source of bugs (by omission). Prioritise correctness over backwards compatibility.
+## Test Overrides
 
----
-
-If you need to provide an override to a function or modules' behavior during tests, don't use an `@internal` property, like so:
+If a function or module needs different behavior in tests, do not add `@internal` test-only fields to its public type. Instead, take the dependency as an explicit constructor/function parameter and inject a different implementation in tests.
 
 ```ts
 // BAD
-type Example = {
-  /** @internal Test-only override for the idle warning interval in milliseconds. Default: 60000 (1 minute). */
+type Config = {
+  /** @internal Test-only override. */
   readonly _idleWarningIntervalMs?: number;
-  /** @internal Override for the host projects directory (for testing). */
-  readonly _hostProjectsDir?: string;
-  /** @internal Override for the sandbox projects directory (for testing). */
-  readonly _sandboxProjectsDir?: string;
+};
+
+// GOOD
+type Config = {
+  readonly idleWarningIntervalMs: number;
 };
 ```
-
-Instead, create a config layer using Effect for that function, then instantiate that differently in tests and in production. This helps keep the code cleaner. Don't make this layer optional - that adds more indirection to all layers of the code.
 
 ---
 
@@ -66,7 +93,7 @@ Tests verify behavior through public interfaces, not implementation details. Cod
 
 Integration-style tests that exercise real code paths through public APIs. They describe _what_ the system does, not _how_.
 
-```typescript
+```ts
 // GOOD: Tests observable behavior through the public interface
 test("createUser makes user retrievable", async () => {
   const user = await createUser({ name: "Alice" });
@@ -82,7 +109,7 @@ test("createUser makes user retrievable", async () => {
 
 ### Bad Tests
 
-```typescript
+```ts
 // BAD: Mocks internal collaborator, tests HOW not WHAT
 test("checkout calls paymentService.process", async () => {
   const mockPayment = jest.mock(paymentService);
@@ -111,9 +138,9 @@ Red flags:
 
 Mock at **system boundaries** only:
 
-- External APIs (payment, email, etc.)
+- External APIs (payment, email, Neon, etc.)
 - Time/randomness
-- File system or databases when a real instance isn't practical
+- File system when a real instance isn't practical
 
 **Never mock your own classes/modules or internal collaborators.** If something is hard to test without mocking internals, redesign the interface.
 
@@ -133,6 +160,12 @@ RED→GREEN: test3→impl3
 
 Each test responds to what you learned from the previous cycle. Never refactor while RED — get to GREEN first.
 
+### Test Location
+
+Tests live in `__tests__/` folders, not co-located with source files. Filenames should not redundantly include `__tests__` in the name.
+
+---
+
 ## Interface Design
 
 ### Deep Modules
@@ -146,3 +179,9 @@ Avoid shallow modules: large interface with many methods that just pass through 
 1. **Accept dependencies, don't create them** — pass external dependencies in rather than constructing them internally.
 2. **Return results, don't produce side effects** — a function that returns a value is easier to test than one that mutates state.
 3. **Small surface area** — fewer methods = fewer tests needed, fewer params = simpler test setup.
+
+---
+
+## Documentation
+
+Update design docs/PRDs in `docs/` **before** writing the implementation, not after. Architecture RFCs and plans belong in `docs/` as `.md` files, not in GitHub issues.
