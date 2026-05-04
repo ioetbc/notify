@@ -339,3 +339,45 @@ describe("enrollUser", () => {
     expect(mockCreateWorkflowEnrollment).not.toHaveBeenCalled();
   });
 });
+
+// ── Crypto module tests ─────────────────────────────────────────────
+
+import { encrypt, decrypt } from "../services/crypto";
+
+const TEST_KEY =
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+describe("crypto", () => {
+  it("round-trips plaintext through encrypt/decrypt", () => {
+    const plaintext = "phx_my_secret_token_12345";
+    const encrypted = encrypt(plaintext, TEST_KEY);
+    const decrypted = decrypt(encrypted, TEST_KEY);
+    expect(decrypted).toBe(plaintext);
+  });
+
+  it("produces different ciphertext for same plaintext (random IV)", () => {
+    const a = encrypt("same_input", TEST_KEY);
+    const b = encrypt("same_input", TEST_KEY);
+    expect(a).not.toBe(b);
+  });
+
+  it("ciphertext has three base64 parts separated by colons", () => {
+    const encrypted = encrypt("hello", TEST_KEY);
+    const parts = encrypted.split(":");
+    expect(parts).toHaveLength(3);
+  });
+
+  it("throws on tampered ciphertext", () => {
+    const encrypted = encrypt("sensitive", TEST_KEY);
+    const parts = encrypted.split(":");
+    parts[1] = Buffer.from("tampered").toString("base64");
+    expect(() => decrypt(parts.join(":"), TEST_KEY)).toThrow();
+  });
+
+  it("throws with wrong key", () => {
+    const encrypted = encrypt("secret", TEST_KEY);
+    const wrongKey =
+      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    expect(() => decrypt(encrypted, wrongKey)).toThrow();
+  });
+});

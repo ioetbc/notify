@@ -95,6 +95,21 @@ export const customerEventDefinition = pgTable(
   (table) => [unique().on(table.customerId, table.name, table.source)]
 );
 
+export const posthogIntegration = pgTable("posthog_integration", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  customerId: uuid("customer_id")
+    .notNull()
+    .references(() => customer.id, { onDelete: "cascade" })
+    .unique(),
+  encryptedPat: text("encrypted_pat").notNull(),
+  teamId: text("team_id").notNull(),
+  identityField: text("identity_field").default("distinct_id").notNull(),
+  hogFunctionId: text("hog_function_id"),
+  webhookSecret: text("webhook_secret").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
 export const workflow = pgTable("workflow", {
   id: uuid("id").primaryKey().defaultRandom(),
   customerId: uuid("customer_id")
@@ -246,11 +261,22 @@ export const pushToken = pgTable(
   (table) => [unique().on(table.userId, table.token)]
 );
 
-export const customerRelations = relations(customer, ({ many }) => ({
+export const posthogIntegrationRelations = relations(
+  posthogIntegration,
+  ({ one }) => ({
+    customer: one(customer, {
+      fields: [posthogIntegration.customerId],
+      references: [customer.id],
+    }),
+  })
+);
+
+export const customerRelations = relations(customer, ({ many, one }) => ({
   users: many(user),
   workflows: many(workflow),
   events: many(event),
   eventDefinitions: many(customerEventDefinition),
+  posthogIntegration: one(posthogIntegration),
 }));
 
 export const userRelations = relations(user, ({ one, many }) => ({
@@ -371,6 +397,8 @@ export type Customer = typeof customer.$inferSelect;
 export type NewCustomer = typeof customer.$inferInsert;
 export type CustomerEventDefinition = typeof customerEventDefinition.$inferSelect;
 export type NewCustomerEventDefinition = typeof customerEventDefinition.$inferInsert;
+export type PosthogIntegration = typeof posthogIntegration.$inferSelect;
+export type NewPosthogIntegration = typeof posthogIntegration.$inferInsert;
 export type Workflow = typeof workflow.$inferSelect;
 export type NewWorkflow = typeof workflow.$inferInsert;
 export type Step = typeof step.$inferSelect;

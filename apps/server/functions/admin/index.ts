@@ -3,6 +3,7 @@ import { handle } from "hono/aws-lambda";
 import { db, user, customerEventDefinition } from "../../db";
 import { eq, sql } from "drizzle-orm";
 import { workflows } from "./workflows";
+import { integrations } from "./admin.integrations";
 import { EnrollmentWalker } from "../../services/enrollment";
 import { sendPushNotification } from "../../services/enrollment/send";
 
@@ -21,6 +22,7 @@ function getCustomerId(c: { req: { header: (name: string) => string | undefined 
 
 const routes = app
   .route("/workflows", workflows)
+  .route("/integrations", integrations)
   .get("/user-columns", async (c) => {
     const customerId = getCustomerId(c);
 
