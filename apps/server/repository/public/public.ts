@@ -108,8 +108,17 @@ export async function createEvent(values: NewEvent) {
 
 export async function findActiveWorkflowsByTriggerEvent(
   customerId: string,
-  eventName: string
+  eventName: string,
+  source?: "customer_api" | "posthog"
 ) {
+  const conditions = [
+    eq(workflow.customerId, customerId),
+    eq(customerEventDefinition.name, eventName),
+    eq(workflow.status, "active"),
+  ];
+  if (source) {
+    conditions.push(eq(customerEventDefinition.source, source));
+  }
   return db
     .select({ id: workflow.id, customerId: workflow.customerId, name: workflow.name, triggerType: workflow.triggerType, triggerEventDefinitionId: workflow.triggerEventDefinitionId, status: workflow.status, createdAt: workflow.createdAt })
     .from(workflow)
@@ -117,13 +126,7 @@ export async function findActiveWorkflowsByTriggerEvent(
       customerEventDefinition,
       eq(workflow.triggerEventDefinitionId, customerEventDefinition.id)
     )
-    .where(
-      and(
-        eq(workflow.customerId, customerId),
-        eq(customerEventDefinition.name, eventName),
-        eq(workflow.status, "active")
-      )
-    );
+    .where(and(...conditions));
 }
 
 export async function createWorkflowEnrollment(values: {

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
 import { zValidator } from "@hono/zod-validator";
 import * as service from "../../services/public";
+import * as ingestService from "../../services/ingest";
 import {
   createUserSchema,
   updateUserAttributesSchema,
@@ -146,6 +147,29 @@ const routes = app
     }
 
     return c.json(result, 202);
+  })
+  .post("/ingest/posthog/:integrationId", async (c) => {
+    const integrationId = c.req.param("integrationId");
+    const token = c.req.header("x-notify-token");
+
+    if (!token) {
+      return c.json({ error: { code: "unauthorized", message: "Missing X-Notify-Token" } }, 401);
+    }
+
+    const valid = await ingestService.verifyWebhookSecret(integrationId, token);
+    if (!valid) {
+      return c.json({ error: { code: "unauthorized", message: "Invalid token" } }, 401);
+    }
+
+    const payload = await c.req.json();
+
+    const result = await ingestService.ingestPosthogEvent(integrationId, payload);
+
+    if ("error" in result) {
+      return c.json({ ok: true, dropped: true, reason: result.error }, 200);
+    }
+
+    return c.json({ ok: true, workflows_triggered: result.workflows_triggered }, 200);
   });
 
 export type PublicAppType = typeof routes;

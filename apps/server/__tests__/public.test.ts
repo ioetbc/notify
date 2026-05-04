@@ -340,6 +340,56 @@ describe("enrollUser", () => {
   });
 });
 
+// ── Identity resolver tests ─────────────────────────────────────────
+
+import { resolveIdentity } from "../services/identity-resolver";
+
+describe("resolveIdentity", () => {
+  it("returns distinct_id when identity field is distinct_id", () => {
+    const result = resolveIdentity(
+      { event: "purchase", distinct_id: "user-123", properties: {} },
+      { identityField: "distinct_id" }
+    );
+    expect(result).toBe("user-123");
+  });
+
+  it("returns custom property when identity field is a property name", () => {
+    const result = resolveIdentity(
+      {
+        event: "purchase",
+        distinct_id: "anon-456",
+        properties: { email: "alice@example.com" },
+      },
+      { identityField: "email" }
+    );
+    expect(result).toBe("alice@example.com");
+  });
+
+  it("returns null when identity field is missing from properties", () => {
+    const result = resolveIdentity(
+      { event: "purchase", distinct_id: "anon-456", properties: {} },
+      { identityField: "email" }
+    );
+    expect(result).toBeNull();
+  });
+
+  it("returns null when distinct_id is empty", () => {
+    const result = resolveIdentity(
+      { event: "purchase", distinct_id: "", properties: {} },
+      { identityField: "distinct_id" }
+    );
+    expect(result).toBeNull();
+  });
+
+  it("coerces numeric property values to strings", () => {
+    const result = resolveIdentity(
+      { event: "purchase", distinct_id: "anon", properties: { user_id: 42 } },
+      { identityField: "user_id" }
+    );
+    expect(result).toBe("42");
+  });
+});
+
 // ── Crypto module tests ─────────────────────────────────────────────
 
 import { encrypt, decrypt } from "../services/crypto";

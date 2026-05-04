@@ -157,7 +157,11 @@ export async function trackEvent(
   });
 
   const matchingWorkflows =
-    await repository.findActiveWorkflowsByTriggerEvent(customerId, eventName);
+    await repository.findActiveWorkflowsByTriggerEvent(
+      customerId,
+      eventName,
+      "customer_api"
+    );
 
   let workflowsTriggered = 0;
 
