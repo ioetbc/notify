@@ -104,6 +104,29 @@ const integrations = new Hono()
         return c.json({ error: { code: "integration_error", message } }, 400);
       }
     }
-  );
+  )
+  .delete("/posthog", async (c) => {
+    const customerId = getCustomerId(c);
+
+    try {
+      const result = await service.disconnectPosthog(customerId);
+
+      if ("error" in result) {
+        return c.json(
+          { error: { code: "not_connected", message: "No PostHog integration found" } },
+          404
+        );
+      }
+
+      return c.json({ ok: true }, 200);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to disconnect";
+      return c.json(
+        { error: { code: "disconnect_error", message } },
+        500
+      );
+    }
+  });
 
 export { integrations };

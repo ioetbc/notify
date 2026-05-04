@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { eq, and } from "drizzle-orm";
-import { db, posthogIntegration, customerEventDefinition } from "../../db";
+import { eq, and, inArray } from "drizzle-orm";
+import { db, posthogIntegration, customerEventDefinition, workflow } from "../../db";
 import { encrypt, decrypt } from "../crypto";
 import * as posthogClient from "../posthog-client";
 
@@ -188,6 +188,56 @@ export async function updatePosthogIntegration(
       );
     }
   }
+
+  return { ok: true as const };
+}
+
+/** Disconnect PostHog: delete Hog function, remove integration row, pause posthog-triggered workflows. */
+export async function disconnectPosthog(customerId: string) {
+  const integration = await db.query.posthogIntegration.findFirst({
+    where: eq(posthogIntegration.customerId, customerId),
+  });
+
+  if (!integration) return { error: "not_connected" as const };
+
+  const pat = decrypt(integration.encryptedPat, ENCRYPTION_KEY);
+
+  if (integration.hogFunctionId) {
+    await posthogClient.deleteHogFunction(
+      pat,
+      integration.teamId,
+      integration.hogFunctionId
+    );
+  }
+
+  const posthogDefs = await db
+    .select({ id: customerEventDefinition.id })
+    .from(customerEventDefinition)
+    .where(
+      and(
+        eq(customerEventDefinition.customerId, customerId),
+        eq(customerEventDefinition.source, "posthog")
+      )
+    );
+
+  const defIds = posthogDefs.map((d) => d.id);
+
+  if (defIds.length > 0) {
+    await db
+      .update(workflow)
+      .set({ status: "paused" })
+      .where(
+        and(
+          eq(workflow.customerId, customerId),
+          eq(workflow.status, "active"),
+          inArray(workflow.triggerEventDefinitionId, defIds)
+        )
+      );
+  }
+
+  await db
+    .delete(posthogIntegration)
+    .where(eq(posthogIntegration.id, integration.id));
 
   return { ok: true as const };
 }
