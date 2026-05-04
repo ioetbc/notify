@@ -29,7 +29,7 @@ export async function getWorkflow(workflowId: string) {
 
   const workflow = {
     ...workflowRow,
-    triggerEvent: triggerEventDefinition.name,
+    triggerEvent: triggerEventDefinition?.name ?? null,
   };
 
   const steps = await repository.findStepsByWorkflowId(workflowId);

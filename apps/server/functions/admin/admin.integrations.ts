@@ -65,8 +65,7 @@ const integrations = new Hono()
         return c.json({ error: { code: "integration_error", message } }, 400);
       }
     }
-  );
-
+  )
   .put(
     "/posthog",
     zValidator("json", updatePosthogSchema),
@@ -105,6 +104,21 @@ const integrations = new Hono()
       }
     }
   )
+  .delete("/posthog/data", async (c) => {
+    const customerId = getCustomerId(c);
+
+    try {
+      const result = await service.purgePosthogData(customerId);
+      return c.json(result, 200);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to purge data";
+      return c.json(
+        { error: { code: "purge_error", message } },
+        500
+      );
+    }
+  })
   .delete("/posthog", async (c) => {
     const customerId = getCustomerId(c);
 

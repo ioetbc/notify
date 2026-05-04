@@ -3,5 +3,6 @@ export {
   connectPosthog,
   updatePosthogIntegration,
   disconnectPosthog,
+  purgePosthogData,
   getPosthogIntegration,
 } from "./integration";

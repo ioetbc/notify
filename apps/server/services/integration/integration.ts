@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { eq, and, inArray } from "drizzle-orm";
-import { db, posthogIntegration, customerEventDefinition, workflow } from "../../db";
+import { db, posthogIntegration, customerEventDefinition, workflow, event } from "../../db";
 import { encrypt, decrypt } from "../crypto";
 import * as posthogClient from "../posthog-client";
 
@@ -240,6 +240,62 @@ export async function disconnectPosthog(customerId: string) {
     .where(eq(posthogIntegration.id, integration.id));
 
   return { ok: true as const };
+}
+
+/** Purge all PostHog data: events and definitions. Leaves paused workflows intact with null trigger. */
+export async function purgePosthogData(customerId: string) {
+  const posthogDefs = await db
+    .select({ id: customerEventDefinition.id })
+    .from(customerEventDefinition)
+    .where(
+      and(
+        eq(customerEventDefinition.customerId, customerId),
+        eq(customerEventDefinition.source, "posthog")
+      )
+    );
+
+  const defIds = posthogDefs.map((d) => d.id);
+
+  const deletedEvents = await db
+    .delete(event)
+    .where(
+      and(
+        eq(event.customerId, customerId),
+        eq(event.source, "posthog")
+      )
+    )
+    .returning({ id: event.id });
+
+  let definitionsDeleted = 0;
+
+  if (defIds.length > 0) {
+    await db
+      .update(workflow)
+      .set({ triggerEventDefinitionId: null })
+      .where(
+        and(
+          eq(workflow.customerId, customerId),
+          inArray(workflow.triggerEventDefinitionId, defIds)
+        )
+      );
+
+    const deletedDefs = await db
+      .delete(customerEventDefinition)
+      .where(
+        and(
+          eq(customerEventDefinition.customerId, customerId),
+          eq(customerEventDefinition.source, "posthog")
+        )
+      )
+      .returning({ id: customerEventDefinition.id });
+
+    definitionsDeleted = deletedDefs.length;
+  }
+
+  return {
+    events_deleted: deletedEvents.length,
+    definitions_deleted: definitionsDeleted,
+  };
 }
 
 /** Get integration state for the settings screen. */

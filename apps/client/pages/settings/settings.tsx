@@ -4,6 +4,14 @@ import { client, queryClient } from '../../lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
 
 interface PreviewEvent {
   name: string;
@@ -20,6 +28,7 @@ export function Settings() {
   const [previewEvents, setPreviewEvents] = useState<PreviewEvent[]>([]);
   const [selectedEvents, setSelectedEvents] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [purgeDialogOpen, setPurgeDialogOpen] = useState(false);
 
   const integrationQuery = useQuery({
     queryKey: ['posthog-integration'],
@@ -77,6 +86,43 @@ export function Settings() {
     },
   });
 
+  const disconnectMutation = useMutation({
+    mutationFn: async () => {
+      const res = await client.integrations.posthog.$delete();
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error('error' in data ? data.error.message : 'Disconnect failed');
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ['posthog-integration'] });
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : 'Failed to disconnect');
+    },
+  });
+
+  const purgeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await client.integrations.posthog.data.$delete();
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error('error' in data ? data.error.message : 'Purge failed');
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setPurgeDialogOpen(false);
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ['posthog-integration'] });
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : 'Failed to purge data');
+    },
+  });
+
   function toggleEvent(name: string) {
     setSelectedEvents((prev) => {
       const next = new Set(prev);
@@ -103,6 +149,11 @@ export function Settings() {
     return (
       <div className="p-6 max-w-xl">
         <h1 className="text-base font-semibold mb-4">Settings</h1>
+
+        {error && (
+          <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded mb-4">{error}</p>
+        )}
+
         <div className="border rounded-lg p-4 space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="font-medium">PostHog Integration</h2>
@@ -125,7 +176,47 @@ export function Settings() {
                 ))}
             </ul>
           </div>
+          <div className="flex gap-2 pt-2 border-t">
+            <Button
+              variant="outline"
+              onClick={() => disconnectMutation.mutate()}
+              disabled={disconnectMutation.isPending}
+            >
+              {disconnectMutation.isPending ? 'Disconnecting...' : 'Disconnect'}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => setPurgeDialogOpen(true)}
+            >
+              Purge PostHog Data
+            </Button>
+          </div>
         </div>
+
+        <Dialog open={purgeDialogOpen} onOpenChange={setPurgeDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Purge PostHog Data</DialogTitle>
+              <DialogDescription>
+                This will permanently delete all PostHog events and event definitions for
+                your account. Workflows using PostHog triggers will lose their trigger
+                configuration. This action cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPurgeDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => purgeMutation.mutate()}
+                disabled={purgeMutation.isPending}
+              >
+                {purgeMutation.isPending ? 'Purging...' : 'Yes, purge all data'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }

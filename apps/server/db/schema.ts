@@ -118,8 +118,7 @@ export const workflow = pgTable("workflow", {
   name: text("name").notNull(),
   triggerType: triggerTypeEnum("trigger_type").notNull(),
   triggerEventDefinitionId: uuid("trigger_event_definition_id")
-    .notNull()
-    .references(() => customerEventDefinition.id),
+    .references(() => customerEventDefinition.id, { onDelete: "set null" }),
   status: workflowStatusEnum("status").default("draft").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
