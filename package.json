@@ -8,7 +8,7 @@
     "lint": "eslint .",
     "preview": "npm run build && vite preview",
     "prepare": "husky",
-    "test": "sst shell -- bun test",
+    "test": "bun test",
     "sandcastle": "npx tsx .sandcastle/main.ts"
   },
   "dependencies": {
