@@ -57,6 +57,20 @@
       "when": 1777584792198,
       "tag": "0007_good_exodus",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1777744914652,
+      "tag": "0008_living_sally_floyd",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1777826193325,
+      "tag": "0011_thick_ozymandias",
+      "breakpoints": true
     }
   ]
 }

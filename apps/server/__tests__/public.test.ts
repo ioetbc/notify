@@ -5,8 +5,14 @@ const mockFindUserByExternalId = mock<any>();
 const mockCreateUser = mock<any>();
 const mockUpdateUserAttributes = mock<any>();
 const mockCreateEvent = mock<any>();
+const mockEventDefinitionsRun = mock<any>();
 const mockFindActiveWorkflowsByTriggerEvent = mock<any>();
+const mockFindActiveWorkflowTriggers = mock<any>();
 const mockCreateWorkflowEnrollment = mock<any>();
+
+const trackPosthogEventDeps = {
+  eventDefinitions: { run: mockEventDefinitionsRun },
+};
 
 mock.module("../repository/public", () => ({
   findUserByExternalId: mockFindUserByExternalId,
@@ -14,6 +20,17 @@ mock.module("../repository/public", () => ({
   updateUserAttributes: mockUpdateUserAttributes,
   createEvent: mockCreateEvent,
   findActiveWorkflowsByTriggerEvent: mockFindActiveWorkflowsByTriggerEvent,
+  findActiveWorkflowTriggers: mockFindActiveWorkflowTriggers,
+  createWorkflowEnrollment: mockCreateWorkflowEnrollment,
+}));
+
+mock.module("../repository/public/public", () => ({
+  findUserByExternalId: mockFindUserByExternalId,
+  createUser: mockCreateUser,
+  updateUserAttributes: mockUpdateUserAttributes,
+  createEvent: mockCreateEvent,
+  findActiveWorkflowsByTriggerEvent: mockFindActiveWorkflowsByTriggerEvent,
+  findActiveWorkflowTriggers: mockFindActiveWorkflowTriggers,
   createWorkflowEnrollment: mockCreateWorkflowEnrollment,
 }));
 
@@ -27,12 +44,13 @@ mock.module("../repository/workflow", () => ({
 }));
 
 // ── Import service under test (after mocks) ──────────────────────────
-import {
+const {
   createUser,
   updateUserAttributes,
   trackEvent,
+  trackPosthogEvent,
   enrollUser,
-} from "../services/public/public";
+} = await import("../services/public/public");
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -98,7 +116,10 @@ beforeEach(() => {
   mockCreateUser.mockReset();
   mockUpdateUserAttributes.mockReset();
   mockCreateEvent.mockReset();
+  mockEventDefinitionsRun.mockReset();
   mockFindActiveWorkflowsByTriggerEvent.mockReset();
+  mockFindActiveWorkflowTriggers.mockReset();
+  mockFindActiveWorkflowTriggers.mockResolvedValue([]);
   mockCreateWorkflowEnrollment.mockReset();
   mockFindStepsByWorkflowId.mockReset();
   mockFindEdgesByWorkflowId.mockReset();
@@ -264,6 +285,130 @@ describe("trackEvent", () => {
     expect(result).toBeNull();
     expect(mockCreateEvent).not.toHaveBeenCalled();
     expect(mockCreateWorkflowEnrollment).not.toHaveBeenCalled();
+  });
+});
+
+describe("trackPosthogEvent", () => {
+  it("stores and enrolls when distinct_id matches a Notify user externalId", async () => {
+    mockEventDefinitionsRun.mockResolvedValue({ kind: "recordSeen", id: "def-1", active: false });
+    mockFindUserByExternalId.mockResolvedValue(fakeUser());
+    mockCreateEvent.mockResolvedValue({
+      id: "evt-1",
+      eventName: "purchase_completed",
+      createdAt: new Date(),
+    });
+    mockFindActiveWorkflowsByTriggerEvent.mockResolvedValue([
+      fakeWorkflow({
+        triggerType: "custom",
+        triggerEvent: "purchase_completed",
+      }),
+    ]);
+
+    const stepA = fakeStep(STEP_ID, "send", {
+      title: "Thanks",
+      body: "Order received",
+    });
+    mockFindStepsByWorkflowId.mockResolvedValue([stepA]);
+    mockFindEdgesByWorkflowId.mockResolvedValue([]);
+    mockCreateWorkflowEnrollment.mockResolvedValue({ id: "enr-1" });
+
+    const result = await trackPosthogEvent(
+      trackPosthogEventDeps,
+      CUSTOMER_ID,
+      "integration-1",
+      "ext-1",
+      "purchase_completed",
+      { amount: 42 },
+      "2026-05-02T10:00:00.000Z"
+    );
+
+    expect(mockEventDefinitionsRun).toHaveBeenCalledWith({
+      kind: "recordSeen",
+      customerId: CUSTOMER_ID,
+      integrationId: "integration-1",
+      provider: "posthog",
+      eventName: "purchase_completed",
+    });
+    expect(mockCreateEvent).toHaveBeenCalledWith({
+      customerId: CUSTOMER_ID,
+      eventDefinitionId: "def-1",
+      userId: USER_ID,
+      externalId: "ext-1",
+      eventName: "purchase_completed",
+      properties: { amount: 42 },
+      timestamp: new Date("2026-05-02T10:00:00.000Z"),
+    });
+    expect(result.workflows_triggered).toBe(1);
+    expect(mockCreateWorkflowEnrollment).toHaveBeenCalledTimes(1);
+  });
+
+  it("stores unresolved PostHog events without enrolling", async () => {
+    mockEventDefinitionsRun.mockResolvedValue({ kind: "recordSeen", id: "def-1", active: false });
+    mockFindUserByExternalId.mockResolvedValue(null);
+    mockCreateEvent.mockResolvedValue({
+      id: "evt-1",
+      eventName: "purchase_completed",
+      createdAt: new Date(),
+    });
+
+    const result = await trackPosthogEvent(
+      trackPosthogEventDeps,
+      CUSTOMER_ID,
+      "integration-1",
+      "unknown-ext",
+      "purchase_completed"
+    );
+
+    expect(mockCreateEvent).toHaveBeenCalledWith({
+      customerId: CUSTOMER_ID,
+      eventDefinitionId: "def-1",
+      userId: null,
+      externalId: "unknown-ext",
+      eventName: "purchase_completed",
+      properties: null,
+      timestamp: expect.any(Date),
+    });
+    expect(result.user_id).toBeNull();
+    expect(result.workflows_triggered).toBe(0);
+    expect(mockFindActiveWorkflowsByTriggerEvent).not.toHaveBeenCalled();
+    expect(mockCreateWorkflowEnrollment).not.toHaveBeenCalled();
+  });
+
+  it("stores PostHog events even when they are not selected in the catalog", async () => {
+    mockEventDefinitionsRun.mockResolvedValue({ kind: "recordSeen", id: "def-1", active: false });
+    mockFindUserByExternalId.mockResolvedValue(fakeUser());
+    mockCreateEvent.mockResolvedValue({
+      id: "evt-1",
+      eventName: "paused_event",
+      createdAt: new Date(),
+    });
+    mockFindActiveWorkflowsByTriggerEvent.mockResolvedValue([]);
+
+    const result = await trackPosthogEvent(
+      trackPosthogEventDeps,
+      CUSTOMER_ID,
+      "integration-1",
+      "ext-1",
+      "paused_event"
+    );
+
+    expect(mockEventDefinitionsRun).toHaveBeenCalledWith({
+      kind: "recordSeen",
+      customerId: CUSTOMER_ID,
+      integrationId: "integration-1",
+      provider: "posthog",
+      eventName: "paused_event",
+    });
+    expect(mockCreateEvent).toHaveBeenCalledWith({
+      customerId: CUSTOMER_ID,
+      eventDefinitionId: "def-1",
+      userId: USER_ID,
+      externalId: "ext-1",
+      eventName: "paused_event",
+      properties: null,
+      timestamp: expect.any(Date),
+    });
+    expect(result.workflows_triggered).toBe(0);
   });
 });
 

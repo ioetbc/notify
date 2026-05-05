@@ -17,7 +17,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 
-const API_BASE_URL = 'https://nvrt6uv3caioemxhcqxtczzjni0ptvsj.lambda-url.eu-north-1.on.aws';
+const API_BASE_URL = 'https://zhnzcmvxqw2rnfe4jgnc2xs35a0mhndz.lambda-url.eu-north-1.on.aws';
 const CUSTOMER_ID = '00000000-0000-0000-0000-000000000001';
 const EXTERNAL_ID = 'user_001';
 

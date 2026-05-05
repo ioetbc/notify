@@ -1,10 +1,13 @@
 import { Hono } from "hono";
 import { handle } from "hono/aws-lambda";
-import { db, user, event } from "../../db";
-import { eq, sql } from "drizzle-orm";
+import { db, user } from "../../db";
+import { sql } from "drizzle-orm";
 import { workflows } from "./workflows";
 import { EnrollmentWalker } from "../../services/enrollment";
 import { sendPushNotification } from "../../services/enrollment/send";
+import { createEventDefinitionRepo } from "../../repository/event-definition";
+
+const eventDefinitions = createEventDefinitionRepo(db);
 
 const walker = new EnrollmentWalker({
   db,
@@ -44,14 +47,12 @@ const routes = app
   .get("/event-names", async (c) => {
     const customerId = getCustomerId(c);
 
-    const result = await db
-      .selectDistinct({ eventName: event.eventName })
-      .from(event)
-      .where(eq(event.customerId, customerId));
+    const { names } = await eventDefinitions.run({
+      kind: "listActiveNames",
+      customerId,
+    });
 
-    const eventNames = result.map((row) => row.eventName);
-
-    return c.json({ event_names: eventNames }, 200);
+    return c.json({ event_names: names }, 200);
   })
   .post("/enrollments/process", async (c) => {
     const result = await walker.processReadyEnrollments();

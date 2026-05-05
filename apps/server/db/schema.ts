@@ -8,6 +8,7 @@ import {
   unique,
   jsonb,
   boolean,
+  integer,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { z } from "zod";
@@ -47,6 +48,22 @@ export const dispatchStatusEnum = pgEnum("dispatch_status", [
 ]);
 
 export const deliveryProviderEnum = pgEnum("delivery_provider", ["expo"]);
+
+export const integrationProviderEnum = pgEnum("integration_provider", ["posthog"]);
+
+export const PosthogRegionSchema = z.enum(["us", "eu"]);
+export type PosthogRegion = z.infer<typeof PosthogRegionSchema>;
+
+export const PosthogIntegrationConfigSchema = z.object({
+  personal_api_key_encrypted: z.string(),
+  project_id: z.string(),
+  region: PosthogRegionSchema.default("us"),
+  hog_function_id: z.string().nullable(),
+});
+
+export type PosthogIntegrationConfig = z.infer<typeof PosthogIntegrationConfigSchema>;
+
+export type IntegrationConfig = PosthogIntegrationConfig;
 
 
 export const customer = pgTable("customer", {
@@ -200,9 +217,13 @@ export const event = pgTable("event", {
   customerId: uuid("customer_id")
     .notNull()
     .references(() => customer.id, { onDelete: "cascade" }),
+  eventDefinitionId: uuid("event_definition_id").references(
+    () => customerEventDefinition.id,
+    { onDelete: "set null" }
+  ),
   userId: uuid("user_id")
-    .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
+  externalId: text("external_id").notNull(),
   eventName: text("event_name").notNull(),
   properties: jsonb("properties"),
   timestamp: timestamp("timestamp", { withTimezone: true }).notNull(),
@@ -222,11 +243,79 @@ export const pushToken = pgTable(
   (table) => [unique().on(table.userId, table.token)]
 );
 
+export const customerIntegration = pgTable(
+  "customer_integration",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customer.id, { onDelete: "cascade" }),
+    provider: integrationProviderEnum("provider").notNull(),
+    config: jsonb("config").$type<IntegrationConfig>().notNull(),
+    connectedAt: timestamp("connected_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [unique().on(table.customerId, table.provider)]
+);
+
+export const customerEventDefinition = pgTable(
+  "customer_event_definition",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customer.id, { onDelete: "cascade" }),
+    integrationId: uuid("integration_id")
+      .notNull()
+      .references(() => customerIntegration.id, { onDelete: "cascade" }),
+    provider: integrationProviderEnum("provider").notNull(),
+    eventName: text("event_name").notNull(),
+    volume: integer("volume"),
+    active: boolean("active").default(true).notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [unique().on(table.integrationId, table.eventName)]
+);
+
+export type CustomerIntegration = typeof customerIntegration.$inferSelect;
+export type NewCustomerIntegration = typeof customerIntegration.$inferInsert;
+export type CustomerEventDefinition = typeof customerEventDefinition.$inferSelect;
+export type NewCustomerEventDefinition = typeof customerEventDefinition.$inferInsert;
+
 export const customerRelations = relations(customer, ({ many }) => ({
   users: many(user),
   workflows: many(workflow),
   events: many(event),
+  integrations: many(customerIntegration),
+  eventDefinitions: many(customerEventDefinition),
 }));
+
+export const customerIntegrationRelations = relations(
+  customerIntegration,
+  ({ one, many }) => ({
+    customer: one(customer, {
+      fields: [customerIntegration.customerId],
+      references: [customer.id],
+    }),
+    eventDefinitions: many(customerEventDefinition),
+  })
+);
+
+export const customerEventDefinitionRelations = relations(
+  customerEventDefinition,
+  ({ one }) => ({
+    customer: one(customer, {
+      fields: [customerEventDefinition.customerId],
+      references: [customer.id],
+    }),
+    integration: one(customerIntegration, {
+      fields: [customerEventDefinition.integrationId],
+      references: [customerIntegration.id],
+    }),
+  })
+);
 
 export const userRelations = relations(user, ({ one, many }) => ({
   customer: one(customer, {
@@ -296,6 +385,10 @@ export const eventRelations = relations(event, ({ one }) => ({
   customer: one(customer, {
     fields: [event.customerId],
     references: [customer.id],
+  }),
+  eventDefinition: one(customerEventDefinition, {
+    fields: [event.eventDefinitionId],
+    references: [customerEventDefinition.id],
   }),
   user: one(user, {
     fields: [event.userId],

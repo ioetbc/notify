@@ -39,13 +39,28 @@ export default $config({
       },
     });
 
-    new sst.aws.Function('PublicApi', {
-      handler: 'apps/server/functions/public/index.handler',
+    const posthogWebhookApi = new sst.aws.Function('PosthogWebhookApi', {
+      handler: 'apps/server/functions/posthog-webhook/index.handler',
       link: [db],
       url: {
         cors: {
           allowOrigins: ['*'],
-          allowMethods: ['GET', 'POST', 'PATCH'],
+          allowMethods: ['POST'],
+          allowHeaders: ['Content-Type'],
+        },
+      },
+    });
+
+    const publicApi = new sst.aws.Function('PublicApi', {
+      handler: 'apps/server/functions/public/index.handler',
+      link: [db],
+      environment: {
+        WEBHOOK_BASE_URL: posthogWebhookApi.url,
+      },
+      url: {
+        cors: {
+          allowOrigins: ['*'],
+          allowMethods: ['GET', 'POST', 'PATCH', 'DELETE'],
           allowHeaders: ['Content-Type', 'Authorization', 'X-Customer-Id'],
         },
       },
@@ -104,6 +119,7 @@ export default $config({
       },
       environment: {
         VITE_API_URL: adminApi.url,
+        VITE_PUBLIC_API_URL: publicApi.url,
       },
     });
   },

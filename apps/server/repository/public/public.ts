@@ -79,6 +79,18 @@ export async function findActiveWorkflowsByTriggerEvent(
     );
 }
 
+export async function findActiveWorkflowTriggers(customerId: string) {
+  return db
+    .select({
+      id: workflow.id,
+      name: workflow.name,
+      triggerEvent: workflow.triggerEvent,
+      status: workflow.status,
+    })
+    .from(workflow)
+    .where(and(eq(workflow.customerId, customerId), eq(workflow.status, "active")));
+}
+
 export async function createWorkflowEnrollment(values: {
   userId: string;
   workflowId: string;
